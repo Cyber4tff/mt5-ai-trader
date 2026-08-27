@@ -20,10 +20,10 @@ export function AIStatusPanel() {
   ]
 
   return (
-    <Card className="bg-zinc-900/50 border-zinc-800">
+    <Card className="bg-card border-border">
       <CardHeader className="pb-3">
-        <CardTitle className="flex items-center gap-2 text-sm font-medium text-zinc-300">
-          <Cpu className="size-4 text-zinc-400" />
+        <CardTitle className="flex items-center gap-2 text-sm font-medium text-foreground">
+          <Cpu className="size-4 text-muted-foreground" />
           AI Engine Status
         </CardTitle>
       </CardHeader>
@@ -31,21 +31,21 @@ export function AIStatusPanel() {
       <CardContent className="space-y-4 pt-0 text-xs">
         {/* 1. Strategy Info */}
         <div className="space-y-2">
-          <p className="text-[10px] uppercase tracking-wider text-zinc-500 font-medium flex items-center gap-1.5">
+          <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium flex items-center gap-1.5">
             <Target className="size-3" />
             Strategy
           </p>
-          <p className="text-xs text-zinc-200 font-medium leading-tight">
+          <p className="text-xs text-foreground font-medium leading-tight">
             {aiStatus.strategy}
           </p>
           <div className="space-y-1.5 mt-2">
-            <span className="text-[10px] text-zinc-500 uppercase tracking-wider">Patterns</span>
+            <span className="text-[10px] text-muted-foreground uppercase tracking-wider">Patterns</span>
             <div className="flex flex-wrap gap-1">
               {aiStatus.patterns.map((p) => (
                 <Badge
                   key={p}
                   variant="outline"
-                  className="border-emerald-500/30 text-emerald-400 text-[10px] px-1.5 py-0 h-5"
+                  className="border-emerald-500/30 text-emerald-600 dark:text-emerald-400 text-[10px] px-1.5 py-0 h-5"
                 >
                   {p}
                 </Badge>
@@ -53,13 +53,13 @@ export function AIStatusPanel() {
             </div>
           </div>
           <div className="space-y-1.5">
-            <span className="text-[10px] text-zinc-500 uppercase tracking-wider">Structure Analysis</span>
+            <span className="text-[10px] text-muted-foreground uppercase tracking-wider">Structure Analysis</span>
             <div className="flex flex-wrap gap-1">
               {aiStatus.structure_analysis.map((s) => (
                 <Badge
                   key={s}
                   variant="outline"
-                  className="border-blue-500/30 text-blue-400 text-[10px] px-1.5 py-0 h-5"
+                  className="border-sky-500/30 text-sky-600 dark:text-sky-400 text-[10px] px-1.5 py-0 h-5"
                 >
                   {s}
                 </Badge>
@@ -68,33 +68,33 @@ export function AIStatusPanel() {
           </div>
         </div>
 
-        <Separator className="bg-zinc-800" />
+        <Separator className="bg-border" />
 
         {/* 2. MTF Timeframes */}
         <div className="space-y-2">
-          <p className="text-[10px] uppercase tracking-wider text-zinc-500 font-medium flex items-center gap-1.5">
+          <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium flex items-center gap-1.5">
             <TrendingUp className="size-3" />
             MTF Timeframes
           </p>
           <div className="flex items-center gap-1">
             {aiStatus.mtf_timeframes.map((tf, i) => (
               <span key={tf} className="flex items-center gap-1">
-                <span className="bg-zinc-800 border border-zinc-700 px-2 py-1 text-center text-[10px] font-mono text-zinc-300 rounded">
+                <span className="bg-secondary border border-border px-2 py-1 text-center text-[10px] font-mono text-foreground rounded">
                   {tf}
                 </span>
                 {i < aiStatus.mtf_timeframes.length - 1 && (
-                  <ChevronRight className="size-3 text-zinc-600" />
+                  <ChevronRight className="size-3 text-muted-foreground" />
                 )}
               </span>
             ))}
           </div>
         </div>
 
-        <Separator className="bg-zinc-800" />
+        <Separator className="bg-border" />
 
         {/* 3. Risk Configuration */}
         <div className="space-y-2">
-          <p className="text-[10px] uppercase tracking-wider text-zinc-500 font-medium flex items-center gap-1.5">
+          <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium flex items-center gap-1.5">
             <ShieldCheck className="size-3" />
             Risk Configuration
           </p>
@@ -102,10 +102,10 @@ export function AIStatusPanel() {
             {riskParams.map((rp) => (
               <div
                 key={rp.label}
-                className="bg-zinc-800/50 border border-zinc-800 rounded-lg p-2"
+                className="bg-secondary/50 border border-border rounded-lg p-2"
               >
-                <p className="text-[10px] text-zinc-500 truncate">{rp.label}</p>
-                <p className="text-sm font-mono font-semibold text-zinc-200 mt-0.5">
+                <p className="text-[10px] text-muted-foreground truncate">{rp.label}</p>
+                <p className="text-sm font-mono font-semibold text-foreground mt-0.5">
                   {rp.value}
                 </p>
               </div>
@@ -113,11 +113,11 @@ export function AIStatusPanel() {
           </div>
         </div>
 
-        <Separator className="bg-zinc-800" />
+        <Separator className="bg-border" />
 
         {/* 4. Confidence Thresholds */}
         <div className="space-y-3">
-          <p className="text-[10px] uppercase tracking-wider text-zinc-500 font-medium">
+          <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">
             Confidence Thresholds
           </p>
           <div className="space-y-2.5">
@@ -129,12 +129,12 @@ export function AIStatusPanel() {
             <ConfidenceBar
               label="High Confidence"
               value={Math.round(aiStatus.high_confidence * 100)}
-              color="blue"
+              color="sky"
             />
           </div>
         </div>
 
-        <Separator className="bg-zinc-800" />
+        <Separator className="bg-border" />
 
         {/* 5. Mode & Trailing */}
         <div className="flex items-center gap-2 flex-wrap">
@@ -142,8 +142,8 @@ export function AIStatusPanel() {
             className={cn(
               "text-[10px] font-bold uppercase tracking-wider",
               aiStatus.mode === "demo"
-                ? "bg-amber-500/10 text-amber-400 border border-amber-500/30"
-                : "bg-red-500/10 text-red-400 border border-red-500/30"
+                ? "bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/30"
+                : "bg-red-500/10 text-red-600 dark:text-red-400 border border-red-500/30"
             )}
           >
             {aiStatus.mode === "demo" ? "DEMO" : "LIVE"}
@@ -152,8 +152,8 @@ export function AIStatusPanel() {
             className={cn(
               "text-[10px] font-bold uppercase tracking-wider",
               aiStatus.trailing_stop
-                ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/30"
-                : "bg-zinc-800 text-zinc-500 border border-zinc-700"
+                ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30"
+                : "bg-secondary text-muted-foreground border border-border"
             )}
           >
             Trailing Stop: {aiStatus.trailing_stop ? "ON" : "OFF"}
@@ -171,32 +171,31 @@ function ConfidenceBar({
 }: {
   label: string
   value: number
-  color: "emerald" | "blue"
+  color: "emerald" | "sky"
 }) {
   const barColor =
     color === "emerald"
       ? "bg-emerald-500"
-      : "bg-blue-500"
+      : "bg-sky-500"
 
   const markerColor =
     color === "emerald"
-      ? "text-emerald-400 border-emerald-500"
-      : "text-blue-400 border-blue-500"
+      ? "text-emerald-500 border-emerald-500"
+      : "text-sky-500 border-sky-500"
 
   return (
     <div className="space-y-1">
       <div className="flex items-center justify-between">
-        <span className="text-[10px] text-zinc-500">{label}</span>
+        <span className="text-[10px] text-muted-foreground">{label}</span>
         <span className={cn("text-xs font-mono font-semibold", markerColor)}>
           {value}%
         </span>
       </div>
-      <div className="relative h-1.5 w-full rounded-full bg-zinc-800">
+      <div className="relative h-1.5 w-full rounded-full bg-secondary">
         <div
           className={cn("h-full rounded-full transition-all", barColor)}
           style={{ width: `${value}%` }}
         />
-        {/* Marker triangle */}
         <div
           className={cn(
             "absolute top-1/2 -translate-y-1/2 -translate-x-1/2 transition-all",
@@ -211,7 +210,7 @@ function ConfidenceBar({
               "border-r-[4px] border-r-transparent",
               color === "emerald"
                 ? "border-b-[6px] border-b-emerald-400"
-                : "border-b-[6px] border-b-blue-400"
+                : "border-b-[6px] border-b-sky-400"
             )}
           />
         </div>

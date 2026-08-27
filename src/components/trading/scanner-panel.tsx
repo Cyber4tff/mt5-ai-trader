@@ -28,19 +28,19 @@ const TF_ORDER = ['D1', 'H1', 'M15'];
 function TrendArrow({ trend }: { trend: TrendDirection }) {
   if (trend === 'UP') return <ArrowUp className="size-3.5 text-emerald-500" />;
   if (trend === 'DOWN') return <ArrowDown className="size-3.5 text-red-500" />;
-  return <ArrowRight className="size-3.5 text-zinc-500" />;
+  return <ArrowRight className="size-3.5 text-muted-foreground" />;
 }
 
 function biasBorderClass(bias: MarketBias) {
   if (bias === 'bullish') return 'border-emerald-500/50';
   if (bias === 'bearish') return 'border-red-500/50';
-  return 'border-zinc-600/50';
+  return 'border-border';
 }
 
 function biasBgClass(bias: MarketBias) {
   if (bias === 'bullish') return 'bg-emerald-500/5';
   if (bias === 'bearish') return 'bg-red-500/5';
-  return 'bg-zinc-900';
+  return 'bg-card';
 }
 
 function isHigherTf(tf: string) {
@@ -84,10 +84,10 @@ function TFPill({
         className={cn(
           'text-[9px] uppercase font-medium tracking-wider',
           bias === 'bullish'
-            ? 'text-emerald-400'
+            ? 'text-emerald-500'
             : bias === 'bearish'
-              ? 'text-red-400'
-              : 'text-zinc-500'
+              ? 'text-red-500'
+              : 'text-muted-foreground'
         )}
       >
         {bias}
@@ -100,7 +100,7 @@ function TFPill({
 }
 
 function headerBgFromScore(score: number, direction: string) {
-  if (!score) return 'bg-zinc-900/50';
+  if (!score) return 'bg-card';
   const absScore = Math.abs(score);
   if (direction === 'bullish' || direction === 'BUY') {
     if (absScore >= 0.7) return 'bg-emerald-500/10';
@@ -110,7 +110,7 @@ function headerBgFromScore(score: number, direction: string) {
     if (absScore >= 0.7) return 'bg-red-500/10';
     if (absScore >= 0.5) return 'bg-red-500/5';
   }
-  return 'bg-zinc-900/50';
+  return 'bg-card';
 }
 
 function ScanResultCard({ result, index }: { result: ScanResult; index: number }) {
@@ -128,43 +128,37 @@ function ScanResultCard({ result, index }: { result: ScanResult; index: number }
       ? 'text-emerald-500'
       : direction === 'bearish' || direction === 'SELL'
         ? 'text-red-500'
-        : 'text-zinc-400';
+        : 'text-muted-foreground';
 
   const directionBadgeClass =
     direction === 'bullish' || direction === 'BUY'
       ? 'bg-emerald-500/15 text-emerald-500 border-emerald-500/30'
       : direction === 'bearish' || direction === 'SELL'
         ? 'bg-red-500/15 text-red-500 border-red-500/30'
-        : 'bg-zinc-700/30 text-zinc-400 border-zinc-600/30';
+        : 'bg-secondary text-muted-foreground border-border';
 
   return (
     <motion.div
       initial={{ opacity: 0, y: 16 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.3, delay: index * 0.08 }}
-      className="rounded-lg border border-zinc-800 overflow-hidden"
+      className="rounded-lg border border-border overflow-hidden"
     >
-      {/* Header row */}
       <button
         onClick={toggle}
         className={cn(
-          'w-full flex items-center gap-3 px-4 py-3 transition-colors hover:bg-zinc-800/30 text-left',
+          'w-full flex items-center gap-3 px-4 py-3 transition-colors hover:bg-accent/50 text-left',
           headerBgFromScore(score, direction)
         )}
       >
-        <span className="text-lg font-bold min-w-[80px]">{symbol}</span>
+        <span className="text-lg font-bold min-w-[80px] text-foreground">{symbol}</span>
 
         <Badge variant="outline" className={cn('text-[10px] font-semibold', directionBadgeClass)}>
           {direction.toUpperCase()}
         </Badge>
 
         {confluence && (
-          <span
-            className={cn(
-              'text-sm font-mono tabular-nums font-semibold',
-              directionColor
-            )}
-          >
+          <span className={cn('text-sm font-mono tabular-nums font-semibold', directionColor)}>
             {(score * 100).toFixed(0)}%
           </span>
         )}
@@ -184,7 +178,6 @@ function ScanResultCard({ result, index }: { result: ScanResult; index: number }
         </div>
       </button>
 
-      {/* Expandable body */}
       <AnimatePresence>
         {expanded && (
           <motion.div
@@ -194,8 +187,7 @@ function ScanResultCard({ result, index }: { result: ScanResult; index: number }
             transition={{ duration: 0.3, ease: 'easeInOut' }}
             className="overflow-hidden"
           >
-            <div className="px-4 pb-4 pt-2 space-y-3 border-t border-zinc-800/50">
-              {/* MTF Grid */}
+            <div className="px-4 pb-4 pt-2 space-y-3 border-t border-border/50">
               <div>
                 <p className="text-[10px] uppercase text-muted-foreground tracking-wider mb-2 font-medium">
                   Multi-Timeframe Analysis
@@ -205,139 +197,101 @@ function ScanResultCard({ result, index }: { result: ScanResult; index: number }
                     const data = timeframes[tf];
                     if (!data) return null;
                     return (
-                      <TFPill
-                        key={tf}
-                        tf={tf}
-                        trend={data.trend}
-                        bias={data.bias}
-                        atr={data.atr}
-                      />
+                      <TFPill key={tf} tf={tf} trend={data.trend} bias={data.bias} atr={data.atr} />
                     );
                   })}
                 </div>
               </div>
 
-              {/* Confluence factors */}
               {confluence && confluence.factors.length > 0 && (
                 <div className="flex flex-wrap gap-1.5">
                   {confluence.factors.map((f, i) => (
-                    <span
-                      key={i}
-                      className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-800 text-muted-foreground"
-                    >
+                    <span key={i} className="text-[10px] px-1.5 py-0.5 rounded bg-secondary text-muted-foreground">
                       {f}
                     </span>
                   ))}
                 </div>
               )}
 
-              {/* Actionable signal details */}
               {hasActionable && actionable && (
                 <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3 space-y-3">
-                  <p className="text-xs font-semibold text-emerald-400 flex items-center gap-1.5">
+                  <p className="text-xs font-semibold text-emerald-600 dark:text-emerald-400 flex items-center gap-1.5">
                     <Zap className="size-3.5" /> Actionable Signal
                   </p>
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
                     <div>
                       <span className="text-muted-foreground block">Direction</span>
-                      <span
-                        className={cn(
-                          'font-mono font-bold',
-                          actionable.direction === 'BUY' ? 'text-emerald-500' : 'text-red-500'
-                        )}
-                      >
+                      <span className={cn('font-mono font-bold', actionable.direction === 'BUY' ? 'text-emerald-500' : 'text-red-500')}>
                         {actionable.direction}
                       </span>
                     </div>
                     <div>
                       <span className="text-muted-foreground block">Entry</span>
-                      <span className="font-mono tabular-nums">{actionable.entry.toFixed(2)}</span>
+                      <span className="font-mono tabular-nums text-foreground">{actionable.entry.toFixed(2)}</span>
                     </div>
                     <div>
                       <span className="text-muted-foreground block">SL</span>
-                      <span className="font-mono tabular-nums text-red-400">
-                        {actionable.sl.toFixed(2)}
-                      </span>
+                      <span className="font-mono tabular-nums text-red-500">{actionable.sl.toFixed(2)}</span>
                     </div>
                     <div>
                       <span className="text-muted-foreground block">TP</span>
-                      <span className="font-mono tabular-nums text-emerald-400">
-                        {actionable.tp.toFixed(2)}
-                      </span>
+                      <span className="font-mono tabular-nums text-emerald-500">{actionable.tp.toFixed(2)}</span>
                     </div>
                     <div>
                       <span className="text-muted-foreground block">Volume</span>
-                      <span className="font-mono tabular-nums">{actionable.volume.toFixed(2)}</span>
+                      <span className="font-mono tabular-nums text-foreground">{actionable.volume.toFixed(2)}</span>
                     </div>
                     <div>
                       <span className="text-muted-foreground block">R:R</span>
-                      <span className="font-mono tabular-nums font-semibold">{actionable.risk_reward.toFixed(2)}</span>
+                      <span className="font-mono tabular-nums font-semibold text-foreground">{actionable.risk_reward.toFixed(2)}</span>
                     </div>
                     <div className="col-span-2">
                       <span className="text-muted-foreground block mb-1">Confidence</span>
                       <div className="flex items-center gap-2">
-                        <div className="flex-1 h-2 rounded-full bg-zinc-800 overflow-hidden">
+                        <div className="flex-1 h-2 rounded-full bg-secondary overflow-hidden">
                           <motion.div
                             className={cn(
                               'h-full rounded-full',
-                              actionable.confidence >= 0.8
-                                ? 'bg-emerald-500'
-                                : actionable.confidence >= 0.65
-                                  ? 'bg-amber-500'
-                                  : 'bg-red-500'
+                              actionable.confidence >= 0.8 ? 'bg-emerald-500' : actionable.confidence >= 0.65 ? 'bg-amber-500' : 'bg-red-500'
                             )}
                             initial={{ width: 0 }}
                             animate={{ width: `${actionable.confidence * 100}%` }}
                             transition={{ duration: 0.6, ease: 'easeOut' }}
                           />
                         </div>
-                        <span className="font-mono text-xs tabular-nums font-semibold">
+                        <span className="font-mono text-xs tabular-nums font-semibold text-foreground">
                           {(actionable.confidence * 100).toFixed(0)}%
                         </span>
                       </div>
                     </div>
                   </div>
 
-                  {/* Confirmation factors */}
                   {actionable.confirmation_factors.length > 0 && (
                     <div className="flex flex-wrap gap-1.5">
                       {actionable.confirmation_factors.map((f, i) => (
-                        <Badge
-                          key={i}
-                          variant="outline"
-                          className="border-emerald-500/20 text-emerald-400 bg-emerald-500/5 text-[10px]"
-                        >
+                        <Badge key={i} variant="outline" className="border-emerald-500/20 text-emerald-600 dark:text-emerald-400 bg-emerald-500/5 text-[10px]">
                           {f}
                         </Badge>
                       ))}
                     </div>
                   )}
 
-                  <Button
-                    size="sm"
-                    className="bg-emerald-600 hover:bg-emerald-700 text-white"
-                    onClick={() => {
-                      toast.success(`Trade execution queued for ${symbol}`, {
-                        description: `${actionable.direction} @ ${actionable.entry} | R:R ${actionable.risk_reward.toFixed(2)}`,
-                      });
-                    }}
-                  >
-                    <Play className="size-3" /> Execute Trade
+                  <Button size="sm" className="bg-emerald-600 hover:bg-emerald-700 text-white" onClick={() => {
+                    toast.success(`Trade signal for ${symbol}`, {
+                      description: `${actionable.direction} @ ${actionable.entry} | R:R ${actionable.risk_reward.toFixed(2)}`,
+                    });
+                  }}>
+                    <Play className="size-3" /> Execute in MT5
                   </Button>
                 </div>
               )}
 
-              {/* Risk failures */}
               {!hasActionable && hasFailures && risk_failures && (
                 <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3 space-y-2">
-                  <p className="text-xs font-semibold text-amber-400">Signal Rejected</p>
+                  <p className="text-xs font-semibold text-amber-600 dark:text-amber-400">Signal Rejected</p>
                   <div className="flex flex-wrap gap-1.5">
                     {risk_failures.map((f, i) => (
-                      <Badge
-                        key={i}
-                        variant="outline"
-                        className="border-red-500/30 text-red-400 bg-red-500/5 text-[10px]"
-                      >
+                      <Badge key={i} variant="outline" className="border-red-500/30 text-red-500 bg-red-500/5 text-[10px]">
                         <X className="size-3" /> {f}
                       </Badge>
                     ))}
@@ -345,10 +299,9 @@ function ScanResultCard({ result, index }: { result: ScanResult; index: number }
                 </div>
               )}
 
-              {/* No trade with reason */}
               {!hasActionable && !hasFailures && (
                 <div className="flex items-center gap-2">
-                  <Badge variant="outline" className="border-zinc-600 text-zinc-400 text-[10px]">
+                  <Badge variant="outline" className="border-border text-muted-foreground text-[10px]">
                     NO TRADE
                   </Badge>
                   <span className="text-xs text-muted-foreground">
@@ -378,27 +331,18 @@ export function ScannerPanel() {
   }, [scanMarkets, autoTrade.symbols]);
 
   return (
-    <Card className="bg-zinc-900/50 border-zinc-800 gap-4">
+    <Card className="bg-card border-border gap-4">
       <CardHeader className="pb-0">
-        <CardTitle className="flex items-center gap-2 text-base">
-          <ScanSearch className="size-4 text-purple-400" />
+        <CardTitle className="flex items-center gap-2 text-base text-foreground">
+          <ScanSearch className="size-4 text-purple-500" />
           Multi-Timeframe Scanner
         </CardTitle>
       </CardHeader>
 
       <CardContent className="space-y-4">
-        {/* Toolbar */}
         <div className="flex items-center gap-3 flex-wrap">
-          <Button
-            size="sm"
-            onClick={handleScan}
-            disabled={scanning}
-          >
-            {scanning ? (
-              <RefreshCw className="size-3.5 animate-spin" />
-            ) : (
-              <RefreshCw className="size-3.5" />
-            )}
+          <Button size="sm" onClick={handleScan} disabled={scanning}>
+            {scanning ? <RefreshCw className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}
             {scanning ? 'Scanning...' : 'Scan Markets'}
           </Button>
 
@@ -407,18 +351,13 @@ export function ScannerPanel() {
               Watching:
             </span>
             {autoTrade.symbols.map((s) => (
-              <Badge
-                key={s}
-                variant="outline"
-                className="border-zinc-700 text-zinc-300 text-[10px] bg-zinc-800/50"
-              >
+              <Badge key={s} variant="outline" className="border-border text-foreground text-[10px] bg-secondary/50">
                 {s}
               </Badge>
             ))}
           </div>
         </div>
 
-        {/* Scan results */}
         <div className="space-y-3">
           <AnimatePresence>
             {scanResults.length === 0 ? (

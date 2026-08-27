@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useCallback } from "react";
-import { Maximize2, Minimize2, RefreshCw, ExternalLink, Monitor, AlertTriangle } from "lucide-react";
+import { Maximize2, Minimize2, RefreshCw, ExternalLink, Monitor, AlertTriangle, Info, ShieldCheck, WifiOff } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -10,14 +10,14 @@ import { useTradingStore } from "@/lib/trading-store";
 
 export function WebTerminalPanel() {
   const connection = useTradingStore((s) => s.connection);
+  const liveState = useTradingStore((s) => s.liveState);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [iframeKey, setIframeKey] = useState(0);
   const [loadFailed, setLoadFailed] = useState(false);
+  const [showHelp, setShowHelp] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
 
   const isLiveMode = connection.connected && connection.mode === "live";
-
-  // Use the pre-computed URL from the store (broker-specific, MT5-only)
   const terminalUrl = connection.webTerminalUrl || "";
 
   const handleRefresh = useCallback(() => {
@@ -44,8 +44,7 @@ export function WebTerminalPanel() {
 
   if (!isLiveMode || !terminalUrl) return null;
 
-  // Determine if this is a broker-specific URL (Headway) or generic
-   const isBrokerSpecific = !terminalUrl.includes("metatraderweb.app") && !terminalUrl.includes("trade.mql5.com");
+  const isBrokerSpecific = !terminalUrl.includes("metatraderweb.app") && !terminalUrl.includes("trade.mql5.com");
 
   return (
     <AnimatePresence>
@@ -56,19 +55,24 @@ export function WebTerminalPanel() {
         exit={{ opacity: 0, y: -20 }}
         className={`flex flex-col ${isFullscreen ? "fixed inset-0 z-[100] bg-black" : ""}`}
       >
-        <Card className="bg-zinc-900/50 border-zinc-800 flex-1 flex flex-col overflow-hidden">
+        <Card className="bg-card border-border flex-1 flex flex-col overflow-hidden">
           <CardHeader className="px-4 md:px-6 py-3 flex-row items-center justify-between flex-shrink-0">
-            <CardTitle className="flex items-center gap-2 text-white text-sm">
+            <CardTitle className="flex items-center gap-2 text-foreground text-sm">
               <Monitor className="size-4 text-emerald-500" />
               MetaTrader 5 Web Terminal
-              <Badge className="bg-red-500/20 text-red-400 border-red-500/30 text-[10px] font-bold ml-2">
+              <Badge className="bg-red-500/20 text-red-600 dark:text-red-400 border-red-500/30 text-[10px] font-bold ml-2">
                 LIVE
               </Badge>
-              <span className="text-xs text-zinc-500 font-normal ml-2">
+              {liveState.mt5Confirmed && (
+                <Badge className="bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border-emerald-500/30 text-[10px] ml-1">
+                  CONNECTED
+                </Badge>
+              )}
+              <span className="text-xs text-muted-foreground font-normal ml-2">
                 {connection.broker} — {connection.server}
               </span>
               {isBrokerSpecific && (
-                <Badge className="bg-emerald-500/20 text-emerald-400 border-emerald-500/30 text-[10px] ml-1">
+                <Badge className="bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border-emerald-500/30 text-[10px] ml-1">
                   MT5 ONLY
                 </Badge>
               )}
@@ -77,7 +81,16 @@ export function WebTerminalPanel() {
               <Button
                 variant="ghost"
                 size="icon"
-                className="h-8 w-8 text-zinc-400 hover:text-white hover:bg-zinc-800"
+                className="h-8 w-8 text-muted-foreground hover:text-foreground hover:bg-accent"
+                onClick={() => setShowHelp(!showHelp)}
+                title="Troubleshooting help"
+              >
+                <Info className="size-3.5" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 text-muted-foreground hover:text-foreground hover:bg-accent"
                 onClick={handleRefresh}
                 title="Refresh terminal"
               >
@@ -86,7 +99,7 @@ export function WebTerminalPanel() {
               <Button
                 size="sm"
                 variant="outline"
-                className="h-8 text-xs text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/10"
+                className="h-8 text-xs text-emerald-600 dark:text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/10"
                 onClick={handleOpenExternal}
                 title="Open in new browser tab"
               >
@@ -96,7 +109,7 @@ export function WebTerminalPanel() {
               <Button
                 variant="ghost"
                 size="icon"
-                className="h-8 w-8 text-zinc-400 hover:text-white hover:bg-zinc-800"
+                className="h-8 w-8 text-muted-foreground hover:text-foreground hover:bg-accent"
                 onClick={toggleFullscreen}
                 title={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
               >
@@ -106,15 +119,77 @@ export function WebTerminalPanel() {
           </CardHeader>
 
           <CardContent className="flex-1 p-0 relative overflow-hidden">
-            {/* Fallback if iframe can't load (e.g. embedded preview) */}
+            {/* Error 10 Troubleshooting Guide */}
+            <AnimatePresence>
+              {showHelp && (
+                <motion.div
+                  initial={{ height: 0, opacity: 0 }}
+                  animate={{ height: "auto", opacity: 1 }}
+                  exit={{ height: 0, opacity: 0 }}
+                  className="absolute inset-x-0 top-0 z-20 bg-card border-b border-border overflow-hidden"
+                >
+                  <div className="p-4 space-y-3">
+                    <div className="flex items-center gap-2">
+                      <AlertTriangle className="size-4 text-amber-500" />
+                      <h3 className="text-sm font-semibold text-foreground">Troubleshooting Connection Issues</h3>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="ml-auto h-6 text-xs text-muted-foreground"
+                        onClick={() => setShowHelp(false)}
+                      >
+                        Close
+                      </Button>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+                      <div className="p-3 rounded-lg bg-red-500/5 border border-red-500/20">
+                        <div className="flex items-center gap-1.5 mb-1.5">
+                          <WifiOff className="size-3.5 text-red-500" />
+                          <span className="font-semibold text-red-600 dark:text-red-400">Error 10 — No Connection</span>
+                        </div>
+                        <p className="text-muted-foreground leading-relaxed">
+                          The MT5 terminal cannot reach the broker&apos;s trade server. This is a network/connectivity issue on MetaTrader&apos;s side, not our platform.
+                        </p>
+                        <ul className="mt-2 space-y-1 text-muted-foreground">
+                          <li>• Try clicking &quot;Open in Tab&quot; — the terminal may work better in a full browser tab</li>
+                          <li>• Check your internet connection is stable</li>
+                          <li>• Try again later — broker servers may be temporarily down</li>
+                          <li>• Verify your broker credentials are correct</li>
+                          <li>• Clear your browser cache and cookies</li>
+                        </ul>
+                      </div>
+
+                      <div className="p-3 rounded-lg bg-emerald-500/5 border border-emerald-500/20">
+                        <div className="flex items-center gap-1.5 mb-1.5">
+                          <ShieldCheck className="size-3.5 text-emerald-500" />
+                          <span className="font-semibold text-emerald-600 dark:text-emerald-400">Best Practice</span>
+                        </div>
+                        <p className="text-muted-foreground leading-relaxed">
+                          For the most reliable experience, we recommend opening the MT5 terminal in a separate browser tab.
+                        </p>
+                        <ul className="mt-2 space-y-1 text-muted-foreground">
+                          <li>• Click &quot;Open in Tab&quot; button above</li>
+                          <li>• Log in with your MT5 credentials there</li>
+                          <li>• Come back here and click &quot;Confirm MT5 Connected&quot; in the sidebar</li>
+                          <li>• AI signals will then be available for you to trade manually</li>
+                        </ul>
+                      </div>
+                    </div>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+
+            {/* Fallback if iframe can't load */}
             {loadFailed && (
-              <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-zinc-900/95 gap-4">
-                <AlertTriangle className="size-10 text-amber-400" />
+              <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-card gap-4">
+                <AlertTriangle className="size-10 text-amber-500" />
                 <div className="text-center max-w-sm">
-                  <h3 className="text-white font-semibold text-sm mb-1">
-                    Terminal can't load here
+                  <h3 className="text-foreground font-semibold text-sm mb-1">
+                    Terminal can&apos;t load here
                   </h3>
-                  <p className="text-xs text-zinc-400 leading-relaxed">
+                  <p className="text-xs text-muted-foreground leading-relaxed">
                     The MT5 Web Terminal needs to open in a full browser window.
                     Click below to open it in a new tab with your broker pre-selected.
                   </p>
@@ -126,9 +201,25 @@ export function WebTerminalPanel() {
                   <ExternalLink className="size-4 mr-2" />
                   Open MT5 Terminal
                 </Button>
-                <p className="text-[10px] text-zinc-500">
-                  Server: <span className="text-zinc-300 font-mono">{connection.mt5Server}</span>
+                <p className="text-[10px] text-muted-foreground">
+                  Server: <span className="text-foreground font-mono">{connection.mt5Server}</span>
                 </p>
+              </div>
+            )}
+
+            {/* Iframe overlay prompting user to log in and confirm */}
+            {!liveState.mt5Confirmed && !loadFailed && (
+              <div className="absolute inset-x-0 bottom-0 z-10 bg-gradient-to-t from-black/80 to-transparent p-4 pointer-events-none">
+                <div className="flex items-center gap-2 pointer-events-auto max-w-md mx-auto">
+                  <div className="flex-1 p-2 rounded-lg bg-black/60 backdrop-blur-sm border border-white/10">
+                    <p className="text-[11px] text-white/90 font-medium">
+                      Step 1: Log into your MT5 account in the terminal above
+                    </p>
+                    <p className="text-[10px] text-white/50 mt-0.5">
+                      Then click &quot;Confirm MT5 Connected&quot; in the sidebar panel →
+                    </p>
+                  </div>
+                </div>
               </div>
             )}
 

@@ -53,8 +53,8 @@ function PositionRow({ position, index }: { position: Position; index: number })
       exit={{ opacity: 0, x: 12 }}
       transition={{ duration: 0.25, delay: index * 0.05 }}
       className={cn(
-        'border-b border-zinc-800/50 transition-colors hover:bg-zinc-800/30',
-        index % 2 === 1 && 'bg-zinc-900/30'
+        'border-b border-border transition-colors hover:bg-accent/50',
+        index % 2 === 1 && 'bg-secondary/30'
       )}
     >
       <td className="px-3 py-2.5">
@@ -127,9 +127,9 @@ export function PositionsTable() {
   const positions = useTradingStore((s) => s.positions);
 
   return (
-    <Card className="bg-zinc-900/50 border-zinc-800 gap-4">
+    <Card className="bg-card border-border gap-4">
       <CardHeader className="pb-0">
-        <CardTitle className="flex items-center gap-2 text-base">
+        <CardTitle className="flex items-center gap-2 text-base text-foreground">
           <List className="size-4 text-blue-400" />
           Open Positions
           <Badge variant="secondary" className="ml-auto text-xs tabular-nums">
@@ -150,8 +150,8 @@ export function PositionsTable() {
           ) : (
             <div className="min-w-[640px]">
               <table className="w-full text-left">
-                <thead className="sticky top-0 z-10 bg-zinc-950/90 backdrop-blur-sm">
-                  <tr className="border-b border-zinc-800">
+                <thead className="sticky top-0 z-10 bg-background/90 backdrop-blur-sm">
+                  <tr className="border-b border-border">
                     <th className="px-3 py-2 text-xs uppercase text-muted-foreground tracking-wider font-medium">
                       Symbol
                     </th>

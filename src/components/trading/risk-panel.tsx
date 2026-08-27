@@ -11,7 +11,7 @@ import { useTradingStore } from '@/lib/trading-store';
 function ThinProgress({ value, color }: { value: number; color: string }) {
   const clamped = Math.min(100, Math.max(0, value));
   return (
-    <div className="h-1.5 w-full rounded-full bg-zinc-800 overflow-hidden">
+    <div className="h-1.5 w-full rounded-full bg-secondary overflow-hidden">
       <motion.div
         className="h-full rounded-full"
         style={{ backgroundColor: color }}
@@ -67,16 +67,16 @@ function MetricCard({
       className={cn(
         "flex flex-col gap-2 rounded-lg p-3 border",
         placeholder
-          ? "border-dashed border-zinc-700 bg-zinc-900/30"
-          : "border-zinc-800/50 bg-zinc-900/80"
+          ? "border-dashed border-border bg-card/50"
+          : "border-border bg-card"
       )}
     >
       <div className="flex items-center justify-between">
-        <span className={cn("text-xs uppercase tracking-wider", placeholder ? "text-zinc-600" : "text-muted-foreground")}>{label}</span>
-        {Icon && <Icon className={cn("size-3.5", placeholder ? "text-zinc-600" : "text-muted-foreground")} />}
+        <span className={cn("text-xs uppercase tracking-wider", placeholder ? "text-muted-foreground/60" : "text-muted-foreground")}>{label}</span>
+        {Icon && <Icon className={cn("size-3.5", placeholder ? "text-muted-foreground/60" : "text-muted-foreground")} />}
       </div>
-      <AnimatedValue value={value} className={placeholder ? "text-zinc-600" : (valueColor || '')} />
-      {sub && <span className={cn("text-xs", placeholder ? "text-zinc-600" : "text-muted-foreground")}>{sub}</span>}
+      <AnimatedValue value={value} className={placeholder ? "text-muted-foreground/60" : (valueColor || 'text-foreground')} />
+      {sub && <span className={cn("text-xs", placeholder ? "text-muted-foreground/60" : "text-muted-foreground")}>{sub}</span>}
       {progress !== undefined && progressColor && !placeholder && (
         <div className="mt-1">
           <ThinProgress value={progress} color={progressColor} />
@@ -151,9 +151,9 @@ export function RiskPanel() {
         : '#ef4444';
 
   return (
-    <Card className="bg-zinc-900/50 border-zinc-800 gap-4">
+    <Card className="bg-card border-border gap-4">
       <CardHeader className="pb-0">
-        <CardTitle className="flex items-center gap-2 text-base">
+        <CardTitle className="flex items-center gap-2 text-base text-foreground">
           <ShieldCheck className="size-4 text-emerald-500" />
           Risk Management
         </CardTitle>
@@ -163,7 +163,7 @@ export function RiskPanel() {
         <MetricCard
           label="Daily P&L"
           value={isConnected ? pnlValue : "$0.00"}
-          valueColor={isConnected ? pnlColor : 'text-zinc-600'}
+          valueColor={isConnected ? pnlColor : 'text-muted-foreground/60'}
           sub={isConnected ? `$${Math.abs(pnl).toFixed(2)} / $${maxDailyLoss.toFixed(2)} limit` : undefined}
           progress={isConnected ? lossUsage : undefined}
           progressColor={pnlProgressColor}
@@ -183,7 +183,7 @@ export function RiskPanel() {
         <MetricCard
           label="Consecutive Losses"
           value={isConnected ? `${consLosses} / ${maxConsecutiveLosses}` : `0 / ${maxConsecutiveLosses || 3}`}
-          valueColor={isConnected ? consLossColor : 'text-zinc-600'}
+          valueColor={isConnected ? consLossColor : 'text-muted-foreground/60'}
           sub={
             isConnected
               ? (consLosses >= maxConsecutiveLosses
@@ -200,7 +200,7 @@ export function RiskPanel() {
         <MetricCard
           label="Remaining Loss Limit"
           value={isConnected ? `$${remainingLossLimit.toFixed(2)}` : "$--"}
-          valueColor={isConnected ? remainingColor : 'text-zinc-600'}
+          valueColor={isConnected ? remainingColor : 'text-muted-foreground/60'}
           sub={
             isConnected
               ? (remainingPct < 20

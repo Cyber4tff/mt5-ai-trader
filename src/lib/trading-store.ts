@@ -9,6 +9,14 @@ import type {
   AutoTradeState,
   SessionMode,
 } from "./trading-types";
+
+// ─── Live connection tracking ────────────────────────────────
+export interface LiveConnectionState {
+  mt5Confirmed: boolean;
+  manualBalance: string;
+  manualEquity: string;
+  connectedAt: string | null;
+}
 import { getWebTerminalUrl } from "./trading-types";
 import { tradingApi, type ConnectParams } from "./trading-api";
 
@@ -74,6 +82,7 @@ interface TradingStore {
   backendAvailable: boolean;
   backendChecking: boolean;
   connection: ConnectionState;
+  liveState: LiveConnectionState;
   positions: Position[];
   pendingOrders: Position[];
   scanResults: ScanResult[];
@@ -89,6 +98,8 @@ interface TradingStore {
   startPaperTrading: (balance?: number, leverage?: number) => Promise<boolean>;
   connect: (broker: string, login: number, password: string, server?: string) => Promise<boolean>;
   disconnect: () => Promise<void>;
+  confirmMT5Connection: (balance?: string, equity?: string) => void;
+  unconfirmMT5Connection: () => void;
   fetchAccount: () => Promise<void>;
   fetchRiskStatus: () => Promise<void>;
   fetchAIStatus: () => Promise<void>;
@@ -125,6 +136,12 @@ export const useTradingStore = create<TradingStore>((set, get) => ({
   backendAvailable: false,
   backendChecking: false,
   connection: { ...EMPTY_CONNECTION },
+  liveState: {
+    mt5Confirmed: false,
+    manualBalance: "",
+    manualEquity: "",
+    connectedAt: null,
+  },
   positions: [],
   pendingOrders: [],
   scanResults: [],
@@ -352,6 +369,32 @@ export const useTradingStore = create<TradingStore>((set, get) => ({
     }
   },
 
+  // ── Confirm / Unconfirm MT5 Connection (live mode) ─────────────────────
+  confirmMT5Connection: (balance?: string, equity?: string) => {
+    set((s) => ({
+      liveState: {
+        mt5Confirmed: true,
+        manualBalance: balance || "",
+        manualEquity: equity || "",
+        connectedAt: new Date().toISOString(),
+      },
+      scanLog: log(s, "✅ MT5 connection confirmed. AI auto-trading now available."),
+    }));
+  },
+
+  unconfirmMT5Connection: () => {
+    set((s) => ({
+      liveState: {
+        mt5Confirmed: false,
+        manualBalance: "",
+        manualEquity: "",
+        connectedAt: null,
+      },
+      autoTrade: { ...s.autoTrade, enabled: false },
+      scanLog: log(s, "MT5 connection unconfirmed. Auto-trading paused."),
+    }));
+  },
+
   // ── Disconnect ────────────────────────────────────────────────────
   disconnect: async () => {
     const state = get();
@@ -367,6 +410,12 @@ export const useTradingStore = create<TradingStore>((set, get) => ({
 
     set({
       connection: { ...EMPTY_CONNECTION },
+      liveState: {
+        mt5Confirmed: false,
+        manualBalance: "",
+        manualEquity: "",
+        connectedAt: null,
+      },
       positions: [],
       pendingOrders: [],
       scanResults: [],

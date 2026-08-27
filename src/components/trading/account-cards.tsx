@@ -21,14 +21,14 @@ const metricDefs: MetricCard[] = [
     icon: Wallet,
     getValue: (a) => `$${a.balance.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
     getSubtext: () => "",
-    colorClass: () => "text-white",
+    colorClass: () => "text-foreground",
   },
   {
     label: "Equity",
     icon: TrendingUp,
     getValue: (a) => `$${a.equity.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
     getSubtext: () => "",
-    colorClass: () => "text-white",
+    colorClass: () => "text-foreground",
   },
   {
     label: "Floating P&L",
@@ -48,18 +48,18 @@ const metricDefs: MetricCard[] = [
     icon: Shield,
     getValue: (a) => `${a.margin_level.toFixed(2)}%`,
     getSubtext: (a) => `$${a.margin.toFixed(2)} used`,
-    colorClass: (a) => (a.margin_level < 150 ? "text-red-500" : a.margin_level < 300 ? "text-amber-400" : "text-white"),
+    colorClass: (a) => (a.margin_level < 150 ? "text-red-500" : a.margin_level < 300 ? "text-amber-500" : "text-foreground"),
   },
 ];
 
 function PlaceholderCard({ label, icon: Icon }: { label: string; icon: React.ElementType }) {
   return (
-    <div className="p-4 rounded-xl border border-dashed border-zinc-700 bg-zinc-900/30">
+    <div className="p-4 rounded-xl border border-dashed border-border bg-card/50">
       <div className="flex items-center justify-between">
-        <span className="text-xs text-zinc-500 uppercase tracking-wider">{label}</span>
-        <Icon className="size-4 text-zinc-600" />
+        <span className="text-xs text-muted-foreground uppercase tracking-wider">{label}</span>
+        <Icon className="size-4 text-muted-foreground/60" />
       </div>
-      <div className="mt-2 text-2xl font-mono font-bold text-zinc-600">--</div>
+      <div className="mt-2 text-2xl font-mono font-bold text-muted-foreground/60">--</div>
     </div>
   );
 }
@@ -71,13 +71,13 @@ function ActiveCard({ def, account }: { def: MetricCard; account: AccountInfo })
   const colorClass = def.colorClass(account);
   return (
     <motion.div
-      className="p-4 rounded-xl border border-zinc-800 bg-zinc-900/50 hover:border-zinc-700 transition-colors"
+      className="p-4 rounded-xl border border-border bg-card hover:border-muted-foreground/30 transition-colors"
       whileHover={{ scale: 1.01 }}
       transition={{ type: "spring", stiffness: 400, damping: 25 }}
     >
       <div className="flex items-center justify-between">
-        <span className="text-xs text-zinc-400 uppercase tracking-wider">{def.label}</span>
-        <Icon className="size-4 text-zinc-500" />
+        <span className="text-xs text-muted-foreground uppercase tracking-wider">{def.label}</span>
+        <Icon className="size-4 text-muted-foreground" />
       </div>
       <div className="mt-2 flex items-baseline gap-2">
         <motion.span
