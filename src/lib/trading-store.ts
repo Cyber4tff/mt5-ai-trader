@@ -7,10 +7,11 @@ import type {
   DailyRiskSummary,
   AIStatus,
   AutoTradeState,
+  SessionMode,
 } from "./trading-types";
 import { tradingApi, type ConnectParams } from "./trading-api";
 
-// ─── Empty defaults (NO mock data) ───────────────────────────
+// ─── Empty defaults (NO mock data) ────────────────────────────
 
 const EMPTY_ACCOUNT: AccountInfo = {
   balance: 0,
@@ -47,11 +48,23 @@ const EMPTY_AI: AIStatus = {
   max_trades_per_day: 0,
   max_spread_points: 0,
   min_risk_reward: 0,
-  mode: "paper",
+  mode: "live",
   trailing_stop: false,
 };
 
-// ─── Store Interface ──────────────────────────────────────────
+const EMPTY_CONNECTION: ConnectionState = {
+  connected: false,
+  sessionId: null,
+  broker: null,
+  server: null,
+  account: null,
+  lastUpdate: null,
+  mode: "live",
+  selectedBrokerId: null,
+  mt5Server: null,
+};
+
+// ─── Store Interface ──────────────────────────────────────
 
 interface TradingStore {
   // State
@@ -69,6 +82,7 @@ interface TradingStore {
   fetchingAccount: boolean;
 
   // Actions
+  connectLive: (brokerName: string, brokerId: string, mt5Server: string) => void;
   startPaperTrading: (balance?: number, leverage?: number) => Promise<boolean>;
   connect: (broker: string, login: number, password: string, server?: string) => Promise<boolean>;
   disconnect: () => Promise<void>;
@@ -104,17 +118,10 @@ function parsePosition(p: Record<string, unknown>): Position {
 }
 
 export const useTradingStore = create<TradingStore>((set, get) => ({
-  // ── Initial State ───────────────────────────────────────────
+  // ── Initial State ──────────────────────────────
   backendAvailable: false,
   backendChecking: false,
-  connection: {
-    connected: false,
-    sessionId: null,
-    broker: null,
-    server: null,
-    account: null,
-    lastUpdate: null,
-  },
+  connection: { ...EMPTY_CONNECTION },
   positions: [],
   pendingOrders: [],
   scanResults: [],
@@ -128,10 +135,41 @@ export const useTradingStore = create<TradingStore>((set, get) => ({
     cycleCount: 0,
   },
   scanning: false,
-  scanLog: ["System ready. Click 'Start Paper Trading' to begin."],
+  scanLog: ["System ready. Select your broker to start live trading."],
   fetchingAccount: false,
 
-  // ── Check Backend Health ────────────────────────────────
+  // ── Connect Live (MT5 Web Terminal) ────────
+  connectLive: (brokerName: string, brokerId: string, mt5Server: string) => {
+    const conn: ConnectionState = {
+      connected: true,
+      sessionId: `live-${brokerId}-${Date.now()}`,
+      broker: brokerName,
+      server: mt5Server,
+      account: null, // Real account data shown in the web terminal
+      lastUpdate: new Date().toISOString(),
+      mode: "live",
+      selectedBrokerId: brokerId,
+      mt5Server,
+    };
+
+    set({
+      connection: conn,
+      positions: [],
+      pendingOrders: [],
+      scanResults: [],
+      riskSummary: EMPTY_RISK,
+      scanLog: log(
+        { ...get(), connection: conn },
+        `✅ LIVE MODE: Connected to ${brokerName} | Server: ${mt5Server} | Log in to your account in the MT5 Web Terminal below.`
+      ),
+    });
+
+    // Try to start paper engine for AI analysis
+    get().checkBackendHealth();
+    get().fetchAIStatus();
+  },
+
+  // ── Check Backend Health ─────────────────────────────────────────────────
   checkBackendHealth: async () => {
     set({ backendChecking: true });
     try {
@@ -144,7 +182,7 @@ export const useTradingStore = create<TradingStore>((set, get) => ({
     }
   },
 
-  // ── Start Paper Trading ────────────────────────────────
+  // ── Start Paper Trading ──────────────────────────────────────────────
   startPaperTrading: async (balance = 10000, leverage = 100) => {
     const state = get();
     set((s) => ({ scanLog: log(s, `Starting paper trading... Balance: $${balance.toLocaleString()} | Leverage: 1:${leverage}`) }));
@@ -179,6 +217,9 @@ export const useTradingStore = create<TradingStore>((set, get) => ({
         server: res.server,
         account,
         lastUpdate: new Date().toISOString(),
+        mode: "paper",
+        selectedBrokerId: null,
+        mt5Server: null,
       };
 
       set({
@@ -193,7 +234,6 @@ export const useTradingStore = create<TradingStore>((set, get) => ({
         ),
       });
 
-      // Fetch real data immediately
       get().fetchAccount();
       get().fetchRiskStatus();
       get().fetchAIStatus();
@@ -209,7 +249,7 @@ export const useTradingStore = create<TradingStore>((set, get) => ({
     }
   },
 
-  // ── Connect (legacy MT5 - now also creates paper session) ─
+  // ── Connect (legacy MT5 via Python backend) ──────────────────────────────────────────────
   connect: async (broker, login, password, server) => {
     const state = get();
     set((s) => ({ scanLog: log(s, `Connecting to ${broker}...`) }));
@@ -245,6 +285,9 @@ export const useTradingStore = create<TradingStore>((set, get) => ({
         server: res.server,
         account,
         lastUpdate: new Date().toISOString(),
+        mode: "paper",
+        selectedBrokerId: null,
+        mt5Server: null,
       };
 
       set({
@@ -255,7 +298,7 @@ export const useTradingStore = create<TradingStore>((set, get) => ({
         riskSummary: EMPTY_RISK,
         scanLog: log(
           { ...get(), connection: conn },
-          `Connected to ${res.broker} (${res.server}). Balance: $${account.balance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} | Mode: ${res.mode?.toUpperCase() || "PAPER"}`
+          `Connected to ${res.broker} (${res.server}). Balance: $${account.balance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
         ),
       });
 
@@ -274,25 +317,21 @@ export const useTradingStore = create<TradingStore>((set, get) => ({
     }
   },
 
-  // ── Disconnect ───────────────────────────────────────────
+  // ── Disconnect ────────────────────────────────────────────────────
   disconnect: async () => {
     const state = get();
-    if (state.connection.sessionId) {
+    const wasLive = state.connection.mode === "live";
+
+    if (state.connection.sessionId && !wasLive) {
       try {
         await tradingApi.disconnect(state.connection.sessionId);
       } catch {
         // ignore disconnect errors
       }
     }
+
     set({
-      connection: {
-        connected: false,
-        sessionId: null,
-        broker: null,
-        server: null,
-        account: null,
-        lastUpdate: null,
-      },
+      connection: { ...EMPTY_CONNECTION },
       positions: [],
       pendingOrders: [],
       scanResults: [],
@@ -302,10 +341,10 @@ export const useTradingStore = create<TradingStore>((set, get) => ({
     });
   },
 
-  // ── Fetch Account (real data from trading engine) ────────
+  // ── Fetch Account (real data from trading engine, paper mode only) ─────────────────────────────────────────────
   fetchAccount: async () => {
     const state = get();
-    if (!state.connection.sessionId) return;
+    if (!state.connection.sessionId || state.connection.mode === "live") return;
 
     set({ fetchingAccount: true });
     try {
@@ -343,10 +382,10 @@ export const useTradingStore = create<TradingStore>((set, get) => ({
     }
   },
 
-  // ── Fetch Risk Status (real data) ────────────────────────
+  // ── Fetch Risk Status (real data) ──────────────────────────────────────────────────────
   fetchRiskStatus: async () => {
     const state = get();
-    if (!state.connection.sessionId) return;
+    if (!state.connection.sessionId || state.connection.mode === "live") return;
 
     try {
       const data = await tradingApi.getRiskStatus(state.connection.sessionId);
@@ -364,7 +403,7 @@ export const useTradingStore = create<TradingStore>((set, get) => ({
     }
   },
 
-  // ── Fetch AI Status (real config from backend) ────────────
+  // ── Fetch AI Status (real config from backend) ───────────────────────────────────────────────────
   fetchAIStatus: async () => {
     try {
       const data = await tradingApi.getAIStatus();
@@ -385,7 +424,7 @@ export const useTradingStore = create<TradingStore>((set, get) => ({
           max_trades_per_day: (data.max_trades_per_day as number) || 0,
           max_spread_points: (data.max_spread_points as number) || 0,
           min_risk_reward: (data.min_risk_reward as number) || 0,
-          mode: ((data.mode as string) || "paper") as "demo" | "live",
+          mode: "live",
           trailing_stop: (data.trailing_stop as boolean) || false,
         },
       });
@@ -394,16 +433,28 @@ export const useTradingStore = create<TradingStore>((set, get) => ({
     }
   },
 
-  // ── Scan Markets (real analysis from backend) ─────────────
+  // ── Scan Markets (real analysis from backend) ─────────────────────────────────────────────
   scanMarkets: async (symbols) => {
     const state = get();
     if (!state.connection.sessionId) return;
+
+    // In live mode, scan uses paper engine for AI analysis only
+    const sessionId = state.connection.mode === "live" ? undefined : state.connection.sessionId;
+    if (state.connection.mode === "live" && !state.backendAvailable) {
+      set((s) => ({
+        scanLog: log(s, "Scan requires the AI analysis engine. Please wait for it to start."),
+      }));
+      return;
+    }
 
     set({ scanning: true });
     set((s) => ({ scanLog: log(s, `Scanning ${symbols?.join(", ") || "all symbols"}...`) }));
 
     try {
-      const data = await tradingApi.scan(state.connection.sessionId, { symbols });
+      const data = await tradingApi.scan(
+        sessionId || state.connection.sessionId!,
+        { symbols }
+      );
       const rawResults = (data.results as Record<string, unknown>[]) || [];
 
       const results: ScanResult[] = rawResults.map((r) => {
@@ -468,10 +519,10 @@ export const useTradingStore = create<TradingStore>((set, get) => ({
     }
   },
 
-  // ── Auto Trade ───────────────────────────────────────────
+  // ── Auto Trade ──────────────────────────────────────────────────────
   toggleAutoTrade: async (enabled, interval) => {
     const state = get();
-    if (!state.connection.sessionId) return;
+    if (!state.connection.sessionId || state.connection.mode === "live") return;
 
     const intervalMin = interval ?? state.autoTrade.intervalMinutes;
     set((s) => ({
@@ -489,10 +540,10 @@ export const useTradingStore = create<TradingStore>((set, get) => ({
     }
   },
 
-  // ── Close Position ───────────────────────────────────────
+  // ── Close Position ──────────────────────────────────────────────────────
   closePosition: async (ticket: number) => {
     const state = get();
-    if (!state.connection.sessionId) return;
+    if (!state.connection.sessionId || state.connection.mode === "live") return;
 
     const pos = state.positions.find((p) => p.ticket === ticket);
     set((s) => ({ scanLog: log(s, `Closing position #${ticket}...`) }));

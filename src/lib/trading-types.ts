@@ -3,6 +3,69 @@ export type MarketBias = "bullish" | "bearish" | "neutral";
 export type TrendDirection = "UP" | "DOWN" | "RANGING";
 export type VolatilityRegime = "high" | "normal" | "low";
 export type TradingMode = "demo" | "live";
+export type SessionMode = "paper" | "live";
+
+export interface BrokerConfig {
+  id: string;
+  name: string;
+  logo: string;
+  servers: string[];
+  webTerminalUrl: string;
+}
+
+export const BROKERS: BrokerConfig[] = [
+  {
+    id: "octafx",
+    name: "OctaFX",
+    logo: "O",
+    servers: [
+      "OctaFX-Real",
+      "OctaFX-Real2",
+      "OctaFX-Real3",
+      "OctaFX-Real4",
+      "OctaFX-Real5",
+      "OctaFX-Demo",
+    ],
+    webTerminalUrl: "https://trade.mql5.com/trade",
+  },
+  {
+    id: "exness",
+    name: "Exness",
+    logo: "E",
+    servers: [
+      "Exness-MT5Real",
+      "Exness-MT5Real2",
+      "Exness-MT5Real3",
+      "Exness-MT5Real4",
+      "Exness-MT5Real5",
+      "Exness-MT5Real6",
+      "Exness-MT5Real7",
+      "Exness-MT5Real8",
+      "Exness-MT5Real9",
+      "Exness-MT5Demo1",
+      "Exness-MT5Demo2",
+    ],
+    webTerminalUrl: "https://trade.mql5.com/trade",
+  },
+  {
+    id: "headway",
+    name: "Headway",
+    logo: "H",
+    servers: [
+      "Headway-MT5-Real",
+      "Headway-MT5-Live",
+      "Headway-MT5-Demo",
+    ],
+    webTerminalUrl: "https://trade.mql5.com/trade",
+  },
+  {
+    id: "custom",
+    name: "Custom Broker",
+    logo: "C",
+    servers: [],
+    webTerminalUrl: "https://trade.mql5.com/trade",
+  },
+];
 
 export interface AccountInfo {
   balance: number;
@@ -146,6 +209,9 @@ export interface ConnectionState {
   server: string | null;
   account: AccountInfo | null;
   lastUpdate: string | null;
+  mode: SessionMode;
+  selectedBrokerId: string | null;
+  mt5Server: string | null;
 }
 
 export interface AutoTradeState {

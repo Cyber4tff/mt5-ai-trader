@@ -11,7 +11,7 @@ import { useTradingStore } from "@/lib/trading-store";
 
 export function Header() {
   const { theme, setTheme } = useTheme();
-  const { connection, aiStatus } = useTradingStore();
+  const { connection } = useTradingStore();
   const mounted = useSyncExternalStore(
     () => () => {},
     () => true,
@@ -20,7 +20,8 @@ export function Header() {
 
   const isConnected = connection.connected;
   const brokerName = connection.broker ?? "Not connected";
-  const mode = aiStatus.mode || "demo";
+  const isLiveMode = connection.mode === "live";
+  const isPaperMode = connection.mode === "paper";
 
   return (
     <header
@@ -33,47 +34,50 @@ export function Header() {
       <div className="flex items-center gap-2">
         <TrendingUp className="size-5 text-emerald-500" />
         <span className="text-sm font-semibold tracking-tight">
-          Cloud AI Trader v2.0
+          Cloud AI Trader
         </span>
       </div>
 
       {/* Center: Connection Status */}
       <div className="hidden sm:flex items-center gap-2">
-        <motion.div
-          className={cn(
-            "size-2 rounded-full",
-            isConnected ? "bg-green-500" : "bg-red-500"
-          )}
-          animate={
-            isConnected
-              ? { scale: [1, 1.4, 1], opacity: [1, 0.6, 1] }
-              : undefined
-          }
-          transition={
-            isConnected
-              ? { duration: 2, repeat: Infinity, ease: "easeInOut" }
-              : undefined
-          }
-        />
+        {isConnected && isLiveMode && (
+          <motion.div
+            className="size-2 rounded-full bg-red-500"
+            animate={{ scale: [1, 1.5, 1], opacity: [1, 0.5, 1] }}
+            transition={{ duration: 1.5, repeat: Infinity, ease: "easeInOut" }}
+          />
+        )}
+        {isConnected && !isLiveMode && (
+          <motion.div
+            className="size-2 rounded-full bg-green-500"
+            animate={{ scale: [1, 1.4, 1], opacity: [1, 0.6, 1] }}
+            transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
+          />
+        )}
+        {!isConnected && (
+          <div className="size-2 rounded-full bg-zinc-600" />
+        )}
         <span className="text-xs text-zinc-400">
           {isConnected
-            ? `Connected to ${brokerName}`
+            ? `${brokerName} — ${isLiveMode ? "Live" : "Paper"}`
             : "Disconnected"}
         </span>
       </div>
 
       {/* Right: Mode Badge + Theme Toggle */}
       <div className="flex items-center gap-3">
-        <Badge
-          className={cn(
-            "text-[10px] font-bold uppercase tracking-wider px-2 py-0.5",
-            mode === "live"
-              ? "bg-red-500/20 text-red-400 border-red-500/30"
-              : "bg-amber-500/20 text-amber-400 border-amber-500/30"
-          )}
-        >
-          {mode === "live" ? "Live" : "Paper"}
-        </Badge>
+        {isConnected && (
+          <Badge
+            className={cn(
+              "text-[10px] font-bold uppercase tracking-wider px-2 py-0.5",
+              isLiveMode
+                ? "bg-red-500/20 text-red-400 border-red-500/30"
+                : "bg-amber-500/20 text-amber-400 border-amber-500/30"
+            )}
+          >
+            {isLiveMode ? "LIVE" : "PAPER"}
+          </Badge>
+        )}
 
         {mounted && (
           <Button
