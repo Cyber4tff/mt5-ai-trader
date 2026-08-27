@@ -189,3 +189,26 @@ Work Log:
 Stage Summary:
 - Tests for: position sizing, risk limits, SL/TP validation, R:R, MTF confluence, signals, market structure, helpers
 - Run: python -m pytest tests/ -v
+
+---
+Task ID: fix-mock-data
+Agent: main
+Task: Remove all mock data, wire dashboard to real Python backend
+
+Work Log:
+- Created /src/lib/trading-api.ts - API client using XTransformPort proxy
+- Created /src/app/api/trading/[...path]/route.ts - catch-all proxy to Python backend on port 8000
+- Completely rewrote /src/lib/trading-store.ts - removed ALL demo data generators, ALL mock data, demoMode flag
+- Store now starts with empty/zero state - data only comes from the Python backend
+- Updated connection-panel.tsx - removed demoMode, requires password, shows "Python engine must be running" hint
+- Updated header.tsx - mode badge reads from aiStatus.mode (backend config) not local flag
+- Updated auto-trade-panel.tsx - made toggleAutoTrade calls async
+- Risk summary: starts at $0.00 / 0 trades / 0 losses - populated from /risk-status endpoint
+- AI status: starts empty - populated from /ai-status endpoint
+- Account: starts with dashes - populated from /account endpoint, polls every 3s
+- Positions: starts empty - populated from /account response
+
+Stage Summary:
+- Zero mock data remains. All data comes from the Python FastAPI backend.
+- Dashboard shows honest empty state when backend is not running.
+- API proxy uses XTransformPort=8000 to reach the Python backend.

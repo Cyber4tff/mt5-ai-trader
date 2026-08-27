@@ -23,12 +23,12 @@ export function AutoTradePanel() {
   }, [autoTrade.intervalMinutes])
 
   const handleToggle = useCallback(
-    (checked: boolean) => {
+    async (checked: boolean) => {
       if (!connection.connected) {
         toast.error("Not connected", { description: "Connect to a broker first." })
         return
       }
-      toggleAutoTrade(checked, localInterval)
+      await toggleAutoTrade(checked, localInterval)
       toast.success(checked ? "Auto-trading enabled" : "Auto-trading disabled")
     },
     [connection.connected, toggleAutoTrade, localInterval]

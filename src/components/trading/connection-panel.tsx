@@ -25,7 +25,7 @@ import { useTradingStore } from "@/lib/trading-store";
 type AccountType = "demo" | "real";
 
 export function ConnectionPanel() {
-  const { connection, demoMode, connect, disconnect } = useTradingStore();
+  const { connection, connect, disconnect, backendAvailable } = useTradingStore();
 
   const [broker, setBroker] = useState<string>("Exness");
   const [accountType, setAccountType] = useState<AccountType>("demo");
@@ -34,19 +34,18 @@ export function ConnectionPanel() {
   const [server, setServer] = useState<string>("");
   const [connecting, setConnecting] = useState(false);
 
-  const isReal = accountType === "real";
   const isConnected = connection.connected;
 
   const handleConnect = useCallback(async () => {
-    if (!login) {
-      toast.error("Login is required");
+    if (!login || !password) {
+      toast.error("Login and password are required");
       return;
     }
 
     setConnecting(true);
     try {
       const success = await connect(
-        broker,
+        broker.toLowerCase(),
         Number(login),
         password,
         server || undefined
@@ -54,7 +53,7 @@ export function ConnectionPanel() {
       if (success) {
         toast.success(`Connected to ${broker}`);
       } else {
-        toast.error("Connection failed. Check your credentials.");
+        toast.error("Connection failed. Is the Python trading engine running?");
       }
     } catch {
       toast.error("Connection error occurred");
@@ -63,8 +62,8 @@ export function ConnectionPanel() {
     }
   }, [broker, login, password, server, connect]);
 
-  const handleDisconnect = useCallback(() => {
-    disconnect();
+  const handleDisconnect = useCallback(async () => {
+    await disconnect();
     toast.info("Disconnected from broker");
   }, [disconnect]);
 
@@ -168,23 +167,25 @@ export function ConnectionPanel() {
             <Button
               className={cn(
                 "w-full mt-1 font-semibold",
-                isReal || !demoMode
+                accountType === "real"
                   ? "border-amber-500 text-amber-400 hover:bg-amber-500/10"
                   : "bg-emerald-600 hover:bg-emerald-700 text-white"
               )}
-              variant={isReal || !demoMode ? "outline" : "default"}
-              disabled={connecting || !login}
+              variant={accountType === "real" ? "outline" : "default"}
+              disabled={connecting || !login || !password}
               onClick={handleConnect}
             >
               {connecting && <Loader2 className="size-4 animate-spin" />}
               {connecting ? "Connecting..." : "Connect"}
             </Button>
 
-            {demoMode && (
-              <p className="text-[11px] text-zinc-500 text-center">
-                DEMO MODE: Simulated connection for testing
-              </p>
-            )}
+            <p className="text-[11px] text-zinc-500 text-center">
+              {!backendAvailable
+                ? "Python trading engine must be running to connect"
+                : accountType === "real"
+                  ? "LIVE account — real money at risk"
+                  : "Demo account — safe for testing"}
+            </p>
           </motion.div>
         ) : (
           <motion.div

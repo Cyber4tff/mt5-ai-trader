@@ -11,7 +11,7 @@ import { useTradingStore } from "@/lib/trading-store";
 
 export function Header() {
   const { theme, setTheme } = useTheme();
-  const { connection, demoMode } = useTradingStore();
+  const { connection, aiStatus } = useTradingStore();
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
@@ -19,7 +19,8 @@ export function Header() {
   }, []);
 
   const isConnected = connection.connected;
-  const brokerName = connection.broker ?? "Exness";
+  const brokerName = connection.broker ?? "Not connected";
+  const mode = aiStatus.mode || "demo";
 
   return (
     <header
@@ -66,12 +67,12 @@ export function Header() {
         <Badge
           className={cn(
             "text-[10px] font-bold uppercase tracking-wider px-2 py-0.5",
-            demoMode
-              ? "bg-amber-500/20 text-amber-400 border-amber-500/30"
-              : "bg-red-500/20 text-red-400 border-red-500/30"
+            mode === "live"
+              ? "bg-red-500/20 text-red-400 border-red-500/30"
+              : "bg-amber-500/20 text-amber-400 border-amber-500/30"
           )}
         >
-          {demoMode ? "Demo Mode" : "Live"}
+          {mode === "live" ? "Live" : "Demo"}
         </Badge>
 
         {mounted && (

@@ -7,186 +7,55 @@ import type {
   DailyRiskSummary,
   AIStatus,
   AutoTradeState,
-  ActionableSignal,
 } from "./trading-types";
+import { tradingApi } from "./trading-api";
 
-// ─── Demo Data Generators ─────────────────────────────────────
+// ─── Empty defaults (NO mock data) ───────────────────────────
 
-function randomBetween(min: number, max: number, decimals = 2): number {
-  return Number((Math.random() * (max - min) + min).toFixed(decimals));
-}
+const EMPTY_ACCOUNT: AccountInfo = {
+  balance: 0,
+  equity: 0,
+  margin: 0,
+  free_margin: 0,
+  leverage: 0,
+  profit: 0,
+  margin_level: 0,
+};
 
-function generateDemoAccount(): AccountInfo {
-  return {
-    balance: 10523.45,
-    equity: 10782.30,
-    margin: 2145.60,
-    free_margin: 8636.70,
-    leverage: 500,
-    profit: 258.85,
-    margin_level: 502.48,
-  };
-}
+const EMPTY_RISK: DailyRiskSummary = {
+  date: new Date().toISOString().split("T")[0],
+  realized_pnl: 0,
+  trades_count: 0,
+  consecutive_losses: 0,
+  remaining_trades: 0,
+  remaining_loss_limit: 0,
+};
 
-function generateDemoPositions(): Position[] {
-  return [
-    {
-      ticket: 8234567,
-      symbol: "XAUUSD",
-      type: "BUY",
-      volume: 0.05,
-      open_price: 2345.20,
-      current_price: 2352.80,
-      sl: 2335.50,
-      tp: 2370.00,
-      profit: 38.00,
-      swap: -0.12,
-      comment: "AI Engine: conf=0.78",
-      time: new Date(Date.now() - 3600000 * 2).toISOString(),
-    },
-    {
-      ticket: 8234580,
-      symbol: "BTCUSD",
-      type: "SELL",
-      volume: 0.02,
-      open_price: 67450.00,
-      current_price: 67280.50,
-      sl: 67900.00,
-      tp: 66500.00,
-      profit: 34.00,
-      swap: 0.00,
-      comment: "AI Engine: conf=0.72",
-      time: new Date(Date.now() - 3600000 * 1).toISOString(),
-    },
-  ];
-}
-
-function generateDemoScanResults(): ScanResult[] {
-  return [
-    {
-      symbol: "XAUUSD",
-      confluence: {
-        direction: "bullish",
-        score: 0.8,
-        higher_tf_bias: "bullish",
-        trend_alignment: true,
-        factors: [
-          "D1: bullish bias",
-          "H4: bullish bias",
-          "H1: bullish bias",
-          "M15: bullish bias",
-          "M5: neutral",
-        ],
-        bullish_ratio: 0.8,
-        bearish_ratio: 0.0,
-      },
-      decisions_count: 2,
-      actionable: {
-        symbol: "XAUUSD",
-        direction: "BUY",
-        entry: 2353.50,
-        sl: 2335.00,
-        tp: 2385.00,
-        volume: 0.04,
-        confidence: 0.82,
-        risk_reward: 1.98,
-        confirmation_factors: [
-          "HTF bullish bias aligns with BUY signal",
-          "Strong MTF confluence (80%)",
-          "All timeframes agree on direction",
-          "Excellent R:R (2.0)",
-          "BOS bullish on H4",
-          "Entry near support level on H1",
-        ],
-        confluence: {
-          direction: "bullish",
-          score: 0.8,
-          higher_tf_bias: "bullish",
-          trend_alignment: true,
-          factors: [],
-          bullish_ratio: 0.8,
-          bearish_ratio: 0.0,
-        },
-      },
-      errors: [],
-      timeframes: {
-        D1: { trend: "UP", bias: "bullish", atr: 32.5, volatility: "normal", signals_count: 0, structure_breaks: 1, sr_levels: 3 },
-        H4: { trend: "UP", bias: "bullish", atr: 12.8, volatility: "normal", signals_count: 1, structure_breaks: 2, sr_levels: 4 },
-        H1: { trend: "UP", bias: "bullish", atr: 5.2, volatility: "normal", signals_count: 1, structure_breaks: 1, sr_levels: 5 },
-        M15: { trend: "UP", bias: "bullish", atr: 2.1, volatility: "low", signals_count: 0, structure_breaks: 0, sr_levels: 3 },
-        M5: { trend: "RANGING", bias: "neutral", atr: 0.9, volatility: "low", signals_count: 0, structure_breaks: 0, sr_levels: 2 },
-      },
-    },
-    {
-      symbol: "BTCUSD",
-      confluence: {
-        direction: "bearish",
-        score: 0.6,
-        higher_tf_bias: "bearish",
-        trend_alignment: false,
-        factors: [
-          "D1: bearish bias",
-          "H4: bearish bias",
-          "H1: neutral",
-          "M15: neutral",
-          "M5: bullish",
-        ],
-        bullish_ratio: 0.2,
-        bearish_ratio: 0.4,
-      },
-      decisions_count: 1,
-      actionable: null,
-      errors: [],
-      risk_failures: ["R:R (1.2) below minimum (1.5)"],
-      timeframes: {
-        D1: { trend: "DOWN", bias: "bearish", atr: 1850.0, volatility: "high", signals_count: 0, structure_breaks: 2, sr_levels: 2 },
-        H4: { trend: "DOWN", bias: "bearish", atr: 720.0, volatility: "high", signals_count: 1, structure_breaks: 1, sr_levels: 3 },
-        H1: { trend: "RANGING", bias: "neutral", atr: 310.0, volatility: "normal", signals_count: 0, structure_breaks: 0, sr_levels: 4 },
-        M15: { trend: "RANGING", bias: "neutral", atr: 125.0, volatility: "normal", signals_count: 0, structure_breaks: 0, sr_levels: 2 },
-        M5: { trend: "UP", bias: "bullish", atr: 52.0, volatility: "normal", signals_count: 0, structure_breaks: 0, sr_levels: 1 },
-      },
-    },
-  ];
-}
-
-function generateDemoRisk(): DailyRiskSummary {
-  return {
-    date: new Date().toISOString().split("T")[0],
-    realized_pnl: 85.30,
-    trades_count: 3,
-    consecutive_losses: 0,
-    remaining_trades: 7,
-    remaining_loss_limit: 4.2,
-  };
-}
-
-function generateDemoAIStatus(): AIStatus {
-  return {
-    strategy: "Naked Forex Price Action + Market Structure",
-    patterns: ["Big Shadow", "Kangaroo Tail", "Last Kiss", "Double Hit"],
-    structure_analysis: ["BOS", "CHOCH", "Liquidity Sweeps", "Swing Points"],
-    mtf_timeframes: ["D1", "H4", "H1", "M15", "M5"],
-    symbols_focus: ["BTCUSD", "XAUUSD"],
-    brokers: ["exness", "octafx", "headway"],
-    confidence_threshold: 0.65,
-    high_confidence: 0.80,
-    risk_per_trade: 0.02,
-    max_daily_loss_pct: 0.06,
-    max_consecutive_losses: 3,
-    max_open_positions: 3,
-    max_trades_per_day: 10,
-    max_spread_points: 50,
-    min_risk_reward: 1.5,
-    mode: "demo",
-    trailing_stop: true,
-  };
-}
+const EMPTY_AI: AIStatus = {
+  strategy: "—",
+  patterns: [],
+  structure_analysis: [],
+  mtf_timeframes: [],
+  symbols_focus: [],
+  brokers: [],
+  confidence_threshold: 0,
+  high_confidence: 0,
+  risk_per_trade: 0,
+  max_daily_loss_pct: 0,
+  max_consecutive_losses: 0,
+  max_open_positions: 0,
+  max_trades_per_day: 0,
+  max_spread_points: 0,
+  min_risk_reward: 0,
+  mode: "demo",
+  trailing_stop: false,
+};
 
 // ─── Store Interface ──────────────────────────────────────────
 
 interface TradingStore {
   // State
-  demoMode: boolean;
+  backendAvailable: boolean;
   connection: ConnectionState;
   positions: Position[];
   pendingOrders: Position[];
@@ -196,21 +65,44 @@ interface TradingStore {
   autoTrade: AutoTradeState;
   scanning: boolean;
   scanLog: string[];
+  fetchingAccount: boolean;
 
   // Actions
-  setDemoMode: (enabled: boolean) => void;
   connect: (broker: string, login: number, password: string, server?: string) => Promise<boolean>;
-  disconnect: () => void;
+  disconnect: () => Promise<void>;
   fetchAccount: () => Promise<void>;
+  fetchRiskStatus: () => Promise<void>;
+  fetchAIStatus: () => Promise<void>;
   scanMarkets: (symbols?: string[]) => Promise<void>;
-  toggleAutoTrade: (enabled: boolean, interval?: number) => void;
+  toggleAutoTrade: (enabled: boolean, interval?: number) => Promise<void>;
   closePosition: (ticket: number) => Promise<void>;
-  simulateTick: () => void;
+}
+
+function log(state: TradingStore, msg: string): string[] {
+  const ts = new Date().toLocaleTimeString();
+  return [...state.scanLog.slice(-200), `[${ts}] ${msg}`];
+}
+
+function parsePosition(p: Record<string, unknown>): Position {
+  return {
+    ticket: p.ticket as number,
+    symbol: (p.symbol as string) || "",
+    type: ((p.type as string) || "BUY").toUpperCase() as "BUY" | "SELL",
+    volume: p.volume as number,
+    open_price: p.open_price as number,
+    current_price: p.current_price as number,
+    sl: p.sl as number,
+    tp: p.tp as number,
+    profit: p.profit as number,
+    swap: p.swap as number,
+    comment: (p.comment as string) || "",
+    time: p.time as string,
+  };
 }
 
 export const useTradingStore = create<TradingStore>((set, get) => ({
   // ── Initial State ───────────────────────────────────────────
-  demoMode: true,
+  backendAvailable: false,
   connection: {
     connected: false,
     sessionId: null,
@@ -222,8 +114,8 @@ export const useTradingStore = create<TradingStore>((set, get) => ({
   positions: [],
   pendingOrders: [],
   scanResults: [],
-  riskSummary: generateDemoRisk(),
-  aiStatus: generateDemoAIStatus(),
+  riskSummary: EMPTY_RISK,
+  aiStatus: EMPTY_AI,
   autoTrade: {
     enabled: false,
     intervalMinutes: 15,
@@ -232,37 +124,85 @@ export const useTradingStore = create<TradingStore>((set, get) => ({
     cycleCount: 0,
   },
   scanning: false,
-  scanLog: ["System initialized. Awaiting connection..."],
+  scanLog: ["System initialized. Start the Python trading engine, then connect."],
+  fetchingAccount: false,
 
-  // ── Actions ─────────────────────────────────────────────────
-  setDemoMode: (enabled) => set({ demoMode: enabled }),
-
+  // ── Connect ──────────────────────────────────────────────
   connect: async (broker, login, password, server) => {
     const state = get();
-    if (state.demoMode) {
-      // Simulate connection
-      await new Promise((r) => setTimeout(r, 1500));
-      const account = generateDemoAccount();
-      const sessionId = `${broker}_${login}_${Date.now()}`;
-      set({
-        connection: {
-          connected: true,
-          sessionId,
-          broker,
-          server: server || `${broker}-MT5Trial`,
-          account,
-          lastUpdate: new Date().toISOString(),
-        },
-        positions: generateDemoPositions(),
-        scanLog: [`[${new Date().toLocaleTimeString()}] Connected to ${broker} (${server || "auto"}). Balance: $${account.balance.toLocaleString()}`],
+    set((s) => ({ scanLog: log(s, `Connecting to ${broker} (login: ${login})...`) }));
+
+    try {
+      const res = await tradingApi.connect({
+        broker: broker.toLowerCase(),
+        account_type: "demo", // always use demo account type label; the server handles real/demo based on broker config
+        login,
+        password,
+        server: server || undefined,
       });
+
+      if (!res.success) {
+        set((s) => ({ scanLog: log(s, `Connection FAILED: ${JSON.stringify(res)}`) }));
+        return false;
+      }
+
+      const account: AccountInfo = {
+        balance: res.account.balance,
+        equity: res.account.equity,
+        margin: res.account.margin || 0,
+        free_margin: res.account.free_margin,
+        leverage: res.account.leverage,
+        profit: 0,
+        margin_level: res.account.margin_level,
+      };
+
+      const conn: ConnectionState = {
+        connected: true,
+        sessionId: res.session_id,
+        broker: res.broker,
+        server: res.server,
+        account,
+        lastUpdate: new Date().toISOString(),
+      };
+
+      set({
+        connection: conn,
+        backendAvailable: true,
+        positions: [],
+        scanResults: [],
+        riskSummary: EMPTY_RISK,
+        scanLog: log(
+          { ...get(), connection: conn },
+          `Connected to ${res.broker} (${res.server}). Balance: $${account.balance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} | Mode: ${res.mode?.toUpperCase() || "DEMO"}`
+        ),
+      });
+
+      // Fetch real data immediately
+      get().fetchAccount();
+      get().fetchRiskStatus();
+      get().fetchAIStatus();
+
       return true;
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : "Unknown error";
+      set((s) => ({
+        backendAvailable: false,
+        scanLog: log(s, `Connection error: ${msg}`),
+      }));
+      return false;
     }
-    // Real API call would go here
-    return false;
   },
 
-  disconnect: () => {
+  // ── Disconnect ───────────────────────────────────────────
+  disconnect: async () => {
+    const state = get();
+    if (state.connection.sessionId) {
+      try {
+        await tradingApi.disconnect(state.connection.sessionId);
+      } catch {
+        // ignore disconnect errors
+      }
+    }
     set({
       connection: {
         connected: false,
@@ -275,108 +215,226 @@ export const useTradingStore = create<TradingStore>((set, get) => ({
       positions: [],
       pendingOrders: [],
       scanResults: [],
+      riskSummary: EMPTY_RISK,
       autoTrade: { enabled: false, intervalMinutes: 15, symbols: ["BTCUSD", "XAUUSD"], lastScan: null, cycleCount: 0 },
-      scanLog: [`[${new Date().toLocaleTimeString()}] Disconnected.`],
+      scanLog: log(state, "Disconnected from broker."),
     });
   },
 
+  // ── Fetch Account (real data from MT5) ────────────────────
   fetchAccount: async () => {
     const state = get();
-    if (state.demoMode && state.connection.connected) {
-      // Simulate price fluctuation
-      await new Promise((r) => setTimeout(r, 200));
-      const account = { ...state.connection.account! };
-      account.equity = account.balance + randomBetween(-500, 800);
-      account.profit = account.equity - account.balance;
-      account.free_margin = account.equity - account.margin;
-      account.margin_level = account.margin > 0 ? (account.equity / account.margin) * 100 : 0;
+    if (!state.connection.sessionId) return;
+
+    set({ fetchingAccount: true });
+    try {
+      const data = await tradingApi.getAccount(state.connection.sessionId);
+      const account: AccountInfo = {
+        balance: data.balance as number,
+        equity: data.equity as number,
+        margin: data.margin as number,
+        free_margin: data.free_margin as number,
+        leverage: data.leverage as number,
+        profit: data.profit as number,
+        margin_level: data.margin_level as number,
+      };
+
+      // Parse positions from account response
+      const rawPositions = (data.positions as Record<string, unknown>[]) || [];
+      const rawOrders = (data.orders as Record<string, unknown>[]) || [];
+
       set({
-        connection: { ...state.connection, account, lastUpdate: new Date().toISOString() },
+        connection: {
+          ...state.connection,
+          account,
+          lastUpdate: new Date().toISOString(),
+        },
+        positions: rawPositions.map(parsePosition),
+        pendingOrders: rawOrders.map(parsePosition),
+        backendAvailable: true,
       });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : "Unknown error";
+      // Don't spam the log on every poll failure
+      if (!msg.includes("502") && !msg.includes("fetch")) {
+        set((s) => ({ scanLog: log(s, `Account fetch error: ${msg}`) }));
+      }
+    } finally {
+      set({ fetchingAccount: false });
     }
   },
 
+  // ── Fetch Risk Status (real data) ────────────────────────
+  fetchRiskStatus: async () => {
+    const state = get();
+    if (!state.connection.sessionId) return;
+
+    try {
+      const data = await tradingApi.getRiskStatus(state.connection.sessionId);
+      const risk: DailyRiskSummary = {
+        date: (data.date as string) || new Date().toISOString().split("T")[0],
+        realized_pnl: (data.realized_pnl as number) || 0,
+        trades_count: (data.trades_count as number) || 0,
+        consecutive_losses: (data.consecutive_losses as number) || 0,
+        remaining_trades: (data.remaining_trades as number) || 0,
+        remaining_loss_limit: (data.remaining_loss_limit as number) || 0,
+      };
+      set({ riskSummary: risk });
+    } catch {
+      // Silent fail for risk polling
+    }
+  },
+
+  // ── Fetch AI Status (real config from backend) ────────────
+  fetchAIStatus: async () => {
+    try {
+      const data = await tradingApi.getAIStatus();
+      set({
+        aiStatus: {
+          strategy: (data.strategy as string) || "—",
+          patterns: (data.patterns as string[]) || [],
+          structure_analysis: (data.structure_analysis as string[]) || [],
+          mtf_timeframes: (data.mtf_timeframes as string[]) || [],
+          symbols_focus: (data.symbols_focus as string[]) || [],
+          brokers: (data.brokers as string[]) || [],
+          confidence_threshold: (data.confidence_threshold as number) || 0,
+          high_confidence: (data.high_confidence as number) || 0,
+          risk_per_trade: (data.risk_per_trade as number) || 0,
+          max_daily_loss_pct: (data.max_daily_loss_pct as number) || 0,
+          max_consecutive_losses: (data.max_consecutive_losses as number) || 0,
+          max_open_positions: (data.max_open_positions as number) || 0,
+          max_trades_per_day: (data.max_trades_per_day as number) || 0,
+          max_spread_points: (data.max_spread_points as number) || 0,
+          min_risk_reward: (data.min_risk_reward as number) || 0,
+          mode: (data.mode as "demo" | "live") || "demo",
+          trailing_stop: (data.trailing_stop as boolean) || false,
+        },
+      });
+    } catch {
+      // Silent fail
+    }
+  },
+
+  // ── Scan Markets (real analysis from backend) ─────────────
   scanMarkets: async (symbols) => {
     const state = get();
-    if (!state.connection.connected) return;
+    if (!state.connection.sessionId) return;
 
     set({ scanning: true });
-    const ts = new Date().toLocaleTimeString();
-    set((s) => ({ scanLog: [...s.scanLog, `[${ts}] Scanning ${symbols?.join(", ") || "all symbols"}...`] }));
+    set((s) => ({ scanLog: log(s, `Scanning ${symbols?.join(", ") || "all symbols"}...`) }));
 
-    await new Promise((r) => setTimeout(r, 2000));
+    try {
+      const data = await tradingApi.scan(state.connection.sessionId, { symbols });
+      const rawResults = (data.results as Record<string, unknown>[]) || [];
 
-    const results = generateDemoScanResults();
-    // Add some randomness to confidence/score
-    results.forEach((r) => {
-      if (r.actionable) {
-        r.actionable.confidence = Math.min(1, r.actionable.confidence + randomBetween(-0.05, 0.05, 3));
-      }
-      if (r.confluence) {
-        r.confluence.score = Math.min(1, r.confluence.score + randomBetween(-0.05, 0.05, 3));
-      }
-    });
+      // Map raw results to our type
+      const results: ScanResult[] = rawResults.map((r) => {
+        const actionable = r.actionable_signal
+          ? {
+              symbol: (r.actionable_signal as Record<string, unknown>).symbol as string,
+              direction: (r.actionable_signal as Record<string, unknown>).direction as "BUY" | "SELL" | "NO_TRADE",
+              entry: (r.actionable_signal as Record<string, unknown>).entry as number,
+              sl: (r.actionable_signal as Record<string, unknown>).sl as number,
+              tp: (r.actionable_signal as Record<string, unknown>).tp as number,
+              volume: (r.actionable_signal as Record<string, unknown>).volume as number,
+              confidence: (r.actionable_signal as Record<string, unknown>).confidence as number,
+              risk_reward: (r.actionable_signal as Record<string, unknown>).risk_reward as number,
+              confirmation_factors: ((r.actionable_signal as Record<string, unknown>).confirmation_factors as string[]) || [],
+              confluence: ((r.actionable_signal as Record<string, unknown>).confluence as ScanResult["confluence"]) || null,
+            }
+          : null;
 
-    const actionableCount = results.filter((r) => r.actionable).length;
-    const noTradeCount = results.length - actionableCount;
-
-    set((s) => ({
-      scanResults: results,
-      scanning: false,
-      autoTrade: { ...s.autoTrade, lastScan: new Date().toISOString(), cycleCount: s.autoTrade.cycleCount + 1 },
-      scanLog: [
-        ...s.scanLog,
-        `[${ts}] Scan complete: ${actionableCount} actionable, ${noTradeCount} NO TRADE`,
-        ...results.flatMap((r) => {
-          const msgs: string[] = [];
-          if (r.actionable) {
-            msgs.push(`[${ts}] ${r.symbol}: ACTIONABLE ${r.actionable.direction} conf=${r.actionable.confidence.toFixed(2)} R:R=${r.actionable.risk_reward.toFixed(1)}`);
-          } else if (r.risk_failures?.length) {
-            msgs.push(`[${ts}] ${r.symbol}: Signal rejected → ${r.risk_failures[0]}`);
-          } else {
-            msgs.push(`[${ts}] ${r.symbol}: NO TRADE`);
-          }
-          return msgs;
-        }),
-      ],
-    }));
-  },
-
-  toggleAutoTrade: (enabled, interval) => {
-    set((s) => ({
-      autoTrade: { ...s.autoTrade, enabled, intervalMinutes: interval ?? s.autoTrade.intervalMinutes },
-      scanLog: [
-        ...s.scanLog,
-        `[${new Date().toLocaleTimeString()}] Auto-trade ${enabled ? "ENABLED" : "DISABLED"} (interval: ${interval ?? s.autoTrade.intervalMinutes}min)`,
-      ],
-    }));
-  },
-
-  closePosition: async (ticket: number) => {
-    const state = get();
-    if (state.demoMode) {
-      await new Promise((r) => setTimeout(r, 500));
-      const closed = state.positions.find((p) => p.ticket === ticket);
-      set({
-        positions: state.positions.filter((p) => p.ticket !== ticket),
-        scanLog: [
-          ...state.scanLog,
-          `[${new Date().toLocaleTimeString()}] Closed position #${ticket} (${closed?.symbol} ${closed?.type}) P&L: $${closed?.profit.toFixed(2)}`,
-        ],
+        return {
+          symbol: r.symbol as string,
+          confluence: (r.confluence as ScanResult["confluence"]) || null,
+          decisions_count: (r.decisions_count as number) || 0,
+          actionable,
+          errors: (r.errors as string[]) || [],
+          risk_failures: (r.risk_failures as string[]) || undefined,
+          timeframes: (r.timeframes as ScanResult["timeframes"]) || {},
+        };
       });
+
+      const actionableCount = results.filter((r) => r.actionable).length;
+      const noTradeCount = results.length - actionableCount;
+
+      set((s) => ({
+        scanResults: results,
+        scanning: false,
+        autoTrade: { ...s.autoTrade, lastScan: new Date().toISOString(), cycleCount: s.autoTrade.cycleCount + 1 },
+        scanLog: [
+          ...log(s, `Scan complete: ${actionableCount} actionable, ${noTradeCount} NO TRADE`),
+          ...results.flatMap((r) => {
+            const msgs: string[] = [];
+            if (r.actionable) {
+              msgs.push(`${r.symbol}: ACTIONABLE ${r.actionable.direction} conf=${r.actionable.confidence.toFixed(2)} R:R=${r.actionable.risk_reward.toFixed(1)}`);
+            } else if (r.risk_failures?.length) {
+              msgs.push(`${r.symbol}: Signal rejected → ${r.risk_failures[0]}`);
+            } else if (r.errors?.length) {
+              msgs.push(`${r.symbol}: Error → ${r.errors[0]}`);
+            } else {
+              msgs.push(`${r.symbol}: NO TRADE`);
+            }
+            return msgs;
+          }),
+        ],
+      }));
+
+      // After scan, refresh risk status (trade counts may have changed)
+      get().fetchRiskStatus();
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : "Unknown error";
+      set((s) => ({
+        scanning: false,
+        scanLog: log(s, `Scan error: ${msg}`),
+      }));
     }
   },
 
-  simulateTick: () => {
+  // ── Auto Trade ───────────────────────────────────────────
+  toggleAutoTrade: async (enabled, interval) => {
     const state = get();
-    if (!state.connection.connected || state.demoMode) return;
-    // Slightly shift current prices on positions
-    const updated = state.positions.map((p) => {
-      const shift = p.type === "BUY" ? randomBetween(-2, 3, 2) : randomBetween(-3, 2, 2);
-      const newPrice = p.current_price + shift;
-      const pnlPerLot = p.type === "BUY" ? (newPrice - p.open_price) : (p.open_price - newPrice);
-      return { ...p, current_price: newPrice, profit: pnlPerLot * p.volume * (p.symbol.includes("XAU") ? 100 : 1) };
-    });
-    set({ positions: updated });
+    if (!state.connection.sessionId) return;
+
+    const intervalMin = interval ?? state.autoTrade.intervalMinutes;
+    set((s) => ({
+      scanLog: log(s, `Auto-trade ${enabled ? "ENABLED" : "DISABLED"} (interval: ${intervalMin}min)`),
+    }));
+
+    try {
+      await tradingApi.toggleAutoTrade(state.connection.sessionId, enabled, intervalMin);
+      set((s) => ({
+        autoTrade: { ...s.autoTrade, enabled, intervalMinutes: intervalMin },
+      }));
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : "Unknown error";
+      set((s) => ({ scanLog: log(s, `Auto-trade error: ${msg}`) }));
+    }
+  },
+
+  // ── Close Position ───────────────────────────────────────
+  closePosition: async (ticket: number) => {
+    const state = get();
+    if (!state.connection.sessionId) return;
+
+    const pos = state.positions.find((p) => p.ticket === ticket);
+    set((s) => ({ scanLog: log(s, `Closing position #${ticket}...`) }));
+
+    try {
+      await tradingApi.closePosition(state.connection.sessionId, ticket);
+      set((s) => ({
+        positions: s.positions.filter((p) => p.ticket !== ticket),
+        scanLog: log(
+          { ...get(), positions: s.positions.filter((p) => p.ticket !== ticket) },
+          `Closed #${ticket} (${pos?.symbol} ${pos?.type}) P&L: $${pos?.profit?.toFixed(2) || "0.00"}`
+        ),
+      }));
+      // Refresh account and risk after close
+      get().fetchAccount();
+      get().fetchRiskStatus();
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : "Unknown error";
+      set((s) => ({ scanLog: log(s, `Close failed #${ticket}: ${msg}`) }));
+    }
   },
 }));
