@@ -9,6 +9,7 @@ import type {
   AutoTradeState,
   SessionMode,
 } from "./trading-types";
+import { getWebTerminalUrl } from "./trading-types";
 import { tradingApi, type ConnectParams } from "./trading-api";
 
 // ─── Empty defaults (NO mock data) ────────────────────────────
@@ -62,6 +63,7 @@ const EMPTY_CONNECTION: ConnectionState = {
   mode: "live",
   selectedBrokerId: null,
   mt5Server: null,
+  webTerminalUrl: null,
 };
 
 // ─── Store Interface ──────────────────────────────────────
@@ -140,6 +142,7 @@ export const useTradingStore = create<TradingStore>((set, get) => ({
 
   // ── Connect Live (MT5 Web Terminal) ────────
   connectLive: (brokerName: string, brokerId: string, mt5Server: string) => {
+    const webTerminalUrl = getWebTerminalUrl(brokerId, mt5Server);
     const conn: ConnectionState = {
       connected: true,
       sessionId: `live-${brokerId}-${Date.now()}`,
@@ -150,6 +153,7 @@ export const useTradingStore = create<TradingStore>((set, get) => ({
       mode: "live",
       selectedBrokerId: brokerId,
       mt5Server,
+      webTerminalUrl,
     };
 
     set({
@@ -220,6 +224,7 @@ export const useTradingStore = create<TradingStore>((set, get) => ({
         mode: "paper",
         selectedBrokerId: null,
         mt5Server: null,
+        webTerminalUrl: null,
       };
 
       set({
@@ -288,6 +293,7 @@ export const useTradingStore = create<TradingStore>((set, get) => ({
         mode: "paper",
         selectedBrokerId: null,
         mt5Server: null,
+        webTerminalUrl: null,
       };
 
       set({

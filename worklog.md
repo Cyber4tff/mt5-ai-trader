@@ -73,3 +73,38 @@ Stage Summary:
 - Fix: Added `startup_version=5` to the iframe URL query parameters
 - Headway servers corrected to: Headway-Demo, Headway-Real, Headway-Live
 - User's Headway demo account confirmed: Login 5639816, Server Headway-Demo
+
+---
+Task ID: 4
+Agent: Main
+Task: Fix MT4 still showing despite startup_version=5 parameter
+
+Work Log:
+- User reported (third time) that the login dialog STILL shows MetaTrader 4 even with `startup_version=5`
+- Analyzed the user's screenshot using VLM: confirmed login dialog shows MT4 radio selected, server shows "MetaQuotes-Demo" not "Headway-Demo"
+- Root cause: the generic `trade.mql5.com/trade` URL does NOT reliably respect `startup_version=5` or `server=` parameters
+- Researched extensively via web search (10+ queries) to find the correct URL format
+- Key discovery from MQL5 article: the official widget URL is now `metatraderweb.app/trade` (not `trade.mql5.com/trade`) and uses `servers` (plural) parameter
+- Major discovery: broker-specific web terminal URLs that ONLY offer MT5:
+  - Headway Demo: `https://hw.online/webterminal/mt5-demo` (server: Headway-Demo pre-filled)
+  - Headway Real: `https://hw.online/webterminal/mt5-real` (server: Headway-Real pre-filled)
+- Redesigned broker config to support per-server MT5 URLs with a 3-tier fallback system:
+  1. Broker-specific direct URL (e.g. `hw.online/webterminal/mt5-demo`) — Headway uses this
+  2. Template URL with server substitution (e.g. `metatraderweb.app/trade?startup_version=5&servers={server}`) — OctaFX/Exness/Custom use this
+  3. Generic MT5 URL as last resort
+- Updated files:
+  - `trading-types.ts`: Replaced single `webTerminalUrl` with `serverWebTerminalUrls` map + `fallbackWebTerminalTemplate` + `getWebTerminalUrl()` function
+  - `trading-store.ts`: `connectLive()` now computes URL via `getWebTerminalUrl()` and stores in `connection.webTerminalUrl`
+  - `web-terminal-panel.tsx`: Now reads `connection.webTerminalUrl` directly, shows "MT5 ONLY" badge for broker-specific URLs
+  - `ConnectionState` interface: Added `webTerminalUrl: string | null` field
+- Browser-verified all three URL strategies:
+  - Headway → `https://hw.online/webterminal/mt5-demo` (MT5 ONLY, no MT4 option exists)
+  - OctaFX → `https://metatraderweb.app/trade?startup_version=5&servers=OctaFX-MT5-Real`
+  - Custom → `https://metatraderweb.app/trade?startup_version=5&servers=MyBroker-MT5-Real`
+
+Stage Summary:
+- The old `trade.mql5.com/trade?startup_version=5&server=X` approach is fundamentally broken — MetaQuotes ignores the parameters
+- Switched to broker-specific URLs (Headway) and the newer `metatraderweb.app` domain (OctaFX/Exness/Custom)
+- Headway now uses `hw.online/webterminal/mt5-demo` and `mt5-real` which are pure MT5 terminals with NO MT4 radio button
+- An "MT5 ONLY" badge is shown in the terminal header when using broker-specific URLs
+- Clean lint, all three broker types verified via browser testing

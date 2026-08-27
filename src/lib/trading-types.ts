@@ -10,7 +10,11 @@ export interface BrokerConfig {
   name: string;
   logo: string;
   servers: string[];
-  webTerminalUrl: string;
+  // Per-server MT5 web terminal URLs (broker-specific pages that ONLY offer MT5)
+  serverWebTerminalUrls: Record<string, string>;
+  // Fallback: used when server is not in the map (e.g. custom broker)
+  // Receives the server name as template variable {server}
+  fallbackWebTerminalTemplate?: string;
 }
 
 export const BROKERS: BrokerConfig[] = [
@@ -26,7 +30,9 @@ export const BROKERS: BrokerConfig[] = [
       "OctaFX-MT5-Real5",
       "OctaFX-MT5-Demo",
     ],
-    webTerminalUrl: "https://trade.mql5.com/trade",
+    serverWebTerminalUrls: {},
+    fallbackWebTerminalTemplate:
+      "https://metatraderweb.app/trade?startup_version=5&servers={server}",
   },
   {
     id: "exness",
@@ -44,7 +50,9 @@ export const BROKERS: BrokerConfig[] = [
       "Exness-MT5Real9",
       "Exness-MT5Demo",
     ],
-    webTerminalUrl: "https://trade.mql5.com/trade",
+    serverWebTerminalUrls: {},
+    fallbackWebTerminalTemplate:
+      "https://metatraderweb.app/trade?startup_version=5&servers={server}",
   },
   {
     id: "headway",
@@ -55,16 +63,41 @@ export const BROKERS: BrokerConfig[] = [
       "Headway-Real",
       "Headway-Live",
     ],
-    webTerminalUrl: "https://trade.mql5.com/trade",
+    // Headway provides broker-specific MT5 web terminals (MT5 ONLY, no MT4 option)
+    serverWebTerminalUrls: {
+      "Headway-Demo": "https://hw.online/webterminal/mt5-demo",
+      "Headway-Real": "https://hw.online/webterminal/mt5-real",
+      "Headway-Live": "https://hw.online/webterminal/mt5-real",
+    },
   },
   {
     id: "custom",
     name: "Custom Broker",
     logo: "C",
     servers: [],
-    webTerminalUrl: "https://trade.mql5.com/trade",
+    serverWebTerminalUrls: {},
+    fallbackWebTerminalTemplate:
+      "https://metatraderweb.app/trade?startup_version=5&servers={server}",
   },
 ];
+
+/** Resolve the correct MT5 web terminal URL for a given broker + server */
+export function getWebTerminalUrl(brokerId: string, server: string): string {
+  const broker = BROKERS.find((b) => b.id === brokerId);
+  if (!broker) {
+    // Unknown broker – use generic MT5 URL with the server pre-filled
+    return `https://metatraderweb.app/trade?startup_version=5&servers=${encodeURIComponent(server)}`;
+  }
+  // 1. Check if there's a broker-specific URL for this exact server
+  const directUrl = broker.serverWebTerminalUrls[server];
+  if (directUrl) return directUrl;
+  // 2. Fall back to the template with {server} replaced
+  if (broker.fallbackWebTerminalTemplate) {
+    return broker.fallbackWebTerminalTemplate.replace("{server}", encodeURIComponent(server));
+  }
+  // 3. Last resort – generic MT5 terminal
+  return `https://metatraderweb.app/trade?startup_version=5&servers=${encodeURIComponent(server)}`;
+}
 
 export interface AccountInfo {
   balance: number;
@@ -211,6 +244,7 @@ export interface ConnectionState {
   mode: SessionMode;
   selectedBrokerId: string | null;
   mt5Server: string | null;
+  webTerminalUrl: string | null;
 }
 
 export interface AutoTradeState {

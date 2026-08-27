@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback } from "react";
 import { Maximize2, Minimize2, RefreshCw, ExternalLink, Monitor, AlertTriangle } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
@@ -16,18 +16,9 @@ export function WebTerminalPanel() {
   const panelRef = useRef<HTMLDivElement>(null);
 
   const isLiveMode = connection.connected && connection.mode === "live";
-  const mt5Server = connection.mt5Server;
 
-  // Build the MT5 Web Terminal URL — startup_version=5 forces MT5 (default is MT4!)
-  const terminalUrl = useMemo(() => {
-    const params = new URLSearchParams({
-      startup_version: "5",
-    });
-    if (mt5Server) {
-      params.set("server", mt5Server);
-    }
-    return `https://trade.mql5.com/trade?${params.toString()}`;
-  }, [mt5Server]);
+  // Use the pre-computed URL from the store (broker-specific, MT5-only)
+  const terminalUrl = connection.webTerminalUrl || "";
 
   const handleRefresh = useCallback(() => {
     setLoadFailed(false);
@@ -35,7 +26,9 @@ export function WebTerminalPanel() {
   }, []);
 
   const handleOpenExternal = useCallback(() => {
-    window.open(terminalUrl, "_blank", "noopener,noreferrer");
+    if (terminalUrl) {
+      window.open(terminalUrl, "_blank", "noopener,noreferrer");
+    }
   }, [terminalUrl]);
 
   const toggleFullscreen = useCallback(() => {
@@ -49,7 +42,10 @@ export function WebTerminalPanel() {
     setIsFullscreen(!isFullscreen);
   }, [isFullscreen]);
 
-  if (!isLiveMode) return null;
+  if (!isLiveMode || !terminalUrl) return null;
+
+  // Determine if this is a broker-specific URL (Headway) or generic
+   const isBrokerSpecific = !terminalUrl.includes("metatraderweb.app") && !terminalUrl.includes("trade.mql5.com");
 
   return (
     <AnimatePresence>
@@ -71,6 +67,11 @@ export function WebTerminalPanel() {
               <span className="text-xs text-zinc-500 font-normal ml-2">
                 {connection.broker} — {connection.server}
               </span>
+              {isBrokerSpecific && (
+                <Badge className="bg-emerald-500/20 text-emerald-400 border-emerald-500/30 text-[10px] ml-1">
+                  MT5 ONLY
+                </Badge>
+              )}
             </CardTitle>
             <div className="flex items-center gap-1">
               <Button
@@ -126,7 +127,7 @@ export function WebTerminalPanel() {
                   Open MT5 Terminal
                 </Button>
                 <p className="text-[10px] text-zinc-500">
-                  Server: <span className="text-zinc-300 font-mono">{mt5Server}</span>
+                  Server: <span className="text-zinc-300 font-mono">{connection.mt5Server}</span>
                 </p>
               </div>
             )}
