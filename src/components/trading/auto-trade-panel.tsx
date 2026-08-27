@@ -14,7 +14,7 @@ import { useTradingStore } from "@/lib/trading-store"
 import { cn } from "@/lib/utils"
 
 export function AutoTradePanel() {
-  const { autoTrade, toggleAutoTrade, scanMarkets, connection, liveState, confirmMT5Connection } = useTradingStore()
+  const { autoTrade, toggleAutoTrade, scanMarkets, connection, liveState } = useTradingStore()
   const localInterval = autoTrade.intervalMinutes
   const isLiveMode = connection.mode === "live"
   const mt5Ready = isLiveMode ? liveState.mt5Confirmed : true

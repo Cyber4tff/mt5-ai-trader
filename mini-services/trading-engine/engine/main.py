@@ -35,6 +35,15 @@ from engine.models import (
 from engine.paper_trading import PaperTradingEngine
 from engine.settings import settings
 
+# Try to import MetaTrader5 (Windows only, requires MT5 desktop app)
+MT5_AVAILABLE = False
+try:
+    import MetaTrader5 as mt5
+    MT5_AVAILABLE = True
+    print("[Engine] MetaTrader5 library loaded successfully")
+except ImportError:
+    print("[Engine] MetaTrader5 library not available - MT5 direct connect disabled")
+
 # ====================================================================
 # FastAPI App
 # ====================================================================
@@ -81,6 +90,12 @@ class ScanRequest(BaseModel):
 class AutoTradeRequest(BaseModel):
     enabled: bool
     interval_minutes: int = 15
+
+
+class MT5ConnectRequest(BaseModel):
+    login: int
+    password: str
+    server: str
 
 
 # ====================================================================
@@ -131,7 +146,183 @@ async def connect(req: ConnectRequest):
 @app.post("/api/trading/disconnect/{session_id}")
 async def disconnect(session_id: str):
     trading_engine.remove_session(session_id)
+    _disconnect_mt5()
     return {"success": True}
+
+
+# ── MT5 Direct Connection ─────────────────────────────────────────
+
+_mt5_connected = False
+_mt5_account_info = None
+
+
+def _connect_mt5(login: int, password: str, server: str) -> dict:
+    """Connect to MT5 terminal and return account info."""
+    global _mt5_connected, _mt5_account_info
+
+    if not MT5_AVAILABLE:
+        return {
+            "success": False,
+            "error": "MT5 library not available on this server. MetaTrader5 requires Windows with the MT5 desktop application installed.",
+            "mt5_available": False,
+        }
+
+    try:
+        if not mt5.initialize():
+            return {"success": False, "error": f"MT5 initialize failed: {mt5.last_error()}", "mt5_available": True}
+
+        authorized = mt5.login(login, password, server)
+        if not authorized:
+            error_code = mt5.last_error()
+            mt5.shutdown()
+            error_messages = {
+                1: "No connection with trade server",
+                2: "Invalid authorization",
+                3: "Invalid password",
+                10: "No connection with trade server",
+            }
+            msg = error_messages.get(error_code, f"Login failed (error {error_code})")
+            return {"success": False, "error": msg, "mt5_available": True, "error_code": error_code}
+
+        _mt5_connected = True
+        account = mt5.account_info()
+        _mt5_account_info = account
+
+        return {
+            "success": True,
+            "mt5_available": True,
+            "account": {
+                "balance": account.balance,
+                "equity": account.equity,
+                "margin": account.margin,
+                "free_margin": account.margin_free,
+                "leverage": account.leverage,
+                "profit": account.profit,
+                "margin_level": account.margin_level if account.margin > 0 else 0,
+                "login": account.login,
+                "name": account.name,
+                "server": account.server,
+                "currency": account.currency,
+            },
+        }
+    except Exception as e:
+        _mt5_connected = False
+        return {"success": False, "error": str(e), "mt5_available": True}
+
+
+def _disconnect_mt5():
+    """Disconnect from MT5."""
+    global _mt5_connected, _mt5_account_info
+    if MT5_AVAILABLE and _mt5_connected:
+        try:
+            mt5.shutdown()
+        except Exception:
+            pass
+    _mt5_connected = False
+    _mt5_account_info = None
+
+
+def _get_mt5_account() -> dict:
+    """Get current MT5 account info."""
+    global _mt5_account_info
+    if not MT5_AVAILABLE or not _mt5_connected:
+        return {"success": False, "error": "Not connected to MT5"}
+
+    try:
+        account = mt5.account_info()
+        if account is None:
+            return {"success": False, "error": "Failed to get account info"}
+        _mt5_account_info = account
+
+        return {
+            "success": True,
+            "account": {
+                "balance": account.balance,
+                "equity": account.equity,
+                "margin": account.margin,
+                "free_margin": account.margin_free,
+                "leverage": account.leverage,
+                "profit": account.profit,
+                "margin_level": account.margin_level if account.margin > 0 else 0,
+                "login": account.login,
+                "name": account.name,
+                "server": account.server,
+                "currency": account.currency,
+            },
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def _get_mt5_positions() -> dict:
+    """Get current MT5 positions."""
+    if not MT5_AVAILABLE or not _mt5_connected:
+        return {"success": False, "error": "Not connected to MT5"}
+
+    try:
+        positions = mt5.positions_get()
+        if positions is None:
+            return {"success": True, "positions": [], "orders": []}
+
+        return {
+            "success": True,
+            "positions": [
+                {
+                    "ticket": p.ticket,
+                    "symbol": p.symbol,
+                    "type": "BUY" if p.type == 0 else "SELL",
+                    "volume": p.volume,
+                    "open_price": p.price_open,
+                    "current_price": p.price_current,
+                    "sl": p.sl,
+                    "tp": p.tp,
+                    "profit": p.profit,
+                    "swap": p.swap,
+                    "comment": p.comment,
+                    "time": str(p.time),
+                }
+                for p in positions
+            ],
+            "orders": [],
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/api/trading/mt5-connect")
+async def mt5_connect(req: MT5ConnectRequest):
+    """Connect to a real MT5 account and return account info."""
+    result = _connect_mt5(req.login, req.password, req.server)
+    return result
+
+
+@app.get("/api/trading/mt5-account")
+async def mt5_account():
+    """Get current MT5 account info (balance, equity, etc.)."""
+    return _get_mt5_account()
+
+
+@app.get("/api/trading/mt5-positions")
+async def mt5_positions():
+    """Get current MT5 open positions."""
+    return _get_mt5_positions()
+
+
+@app.post("/api/trading/mt5-disconnect")
+async def mt5_disconnect():
+    _disconnect_mt5()
+    return {"success": True}
+
+
+@app.get("/api/trading/mt5-status")
+async def mt5_status():
+    """Check if MT5 is connected and available."""
+    return {
+        "mt5_available": MT5_AVAILABLE,
+        "connected": _mt5_connected,
+        "account_login": _mt5_account_info.login if _mt5_account_info else None,
+        "server": _mt5_account_info.server if _mt5_account_info else None,
+    }
 
 
 # ====================================================================

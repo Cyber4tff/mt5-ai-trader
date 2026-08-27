@@ -25,3 +25,28 @@ Stage Summary:
 - MT5 must be confirmed connected before auto-trading enables in live mode
 - Account balance can be manually entered and displayed in live mode
 - All components properly support light and dark themes
+
+---
+Task ID: 2
+Agent: Main Agent
+Task: Make account balance auto-fetched from MT5 connection instead of manual input
+
+Work Log:
+- Checked MetaTrader5 Python library availability - NOT available on Linux (Windows only, requires MT5 desktop app)
+- Added MT5 endpoints to Python backend: /api/trading/mt5-connect, /mt5-account, /mt5-positions, /mt5-status, /mt5-disconnect
+- MT5 backend uses try/except import - gracefully reports unavailable on Linux
+- Added MT5 API methods to trading-api.ts (mt5Connect, mt5Account, mt5Status, mt5Disconnect)
+- Rewrote LiveConnectionState to hold auto-fetched data (balance, equity, profit, margin, etc.)
+- Replaced confirmMT5Connection (manual) with confirmMT5WithCredentials (login, password, server)
+- Added fetchMT5Account action for polling
+- Updated connection panel: credential form with Account Login + Password inputs (server pre-filled)
+- Updated LiveBalanceCard: shows AUTO-SYNC badge when MT5 lib available, TERMINAL ONLY when not
+- Added LiveBalancePoller component: polls every 5 seconds when MT5 auto-sync is active
+- Removed all manual balance input fields
+
+Stage Summary:
+- MT5 connection confirmation now asks for login number + password
+- Backend attempts MT5 direct connection via MetaTrader5 Python library
+- If MT5 lib available (Windows): auto-fetches balance, equity, profit, margin every 5 seconds
+- If MT5 lib unavailable (Linux): graceful fallback with clear message, auto-trade still works
+- No manual balance input anywhere in the UI

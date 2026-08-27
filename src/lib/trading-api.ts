@@ -49,6 +49,34 @@ export interface ConnectResponse {
   };
 }
 
+export interface MT5AccountInfo {
+  balance: number;
+  equity: number;
+  margin: number;
+  free_margin: number;
+  leverage: number;
+  profit: number;
+  margin_level: number;
+  login: number;
+  name: string;
+  server: string;
+  currency: string;
+}
+
+export interface MT5ConnectResponse {
+  success: boolean;
+  mt5_available: boolean;
+  account?: MT5AccountInfo;
+  error?: string;
+  error_code?: number;
+}
+
+export interface MT5AccountResponse {
+  success: boolean;
+  account?: MT5AccountInfo;
+  error?: string;
+}
+
 export const tradingApi = {
   // ── Connection ──────────────────────────────────────────
   connect(data: ConnectParams) {
@@ -69,6 +97,26 @@ export const tradingApi = {
 
   getPositions(sessionId: string) {
     return apiFetch<{ positions: Record<string, unknown>[]; orders: Record<string, unknown>[] }>(`/positions/${sessionId}`);
+  },
+
+  // ── MT5 Direct Connection ────────────────────────────────
+  mt5Connect(login: number, password: string, server: string) {
+    return apiFetch<MT5ConnectResponse>("/mt5-connect", {
+      method: "POST",
+      body: JSON.stringify({ login, password, server }),
+    });
+  },
+
+  mt5Account() {
+    return apiFetch<MT5AccountResponse>("/mt5-account");
+  },
+
+  mt5Status() {
+    return apiFetch<{ mt5_available: boolean; connected: boolean; account_login: number | null; server: string | null }>("/mt5-status");
+  },
+
+  mt5Disconnect() {
+    return apiFetch<{ success: boolean }>("/mt5-disconnect", { method: "POST" });
   },
 
   // ── Scanning ────────────────────────────────────────────
