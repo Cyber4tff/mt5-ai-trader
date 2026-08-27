@@ -96,6 +96,7 @@ interface TradingStore {
   liveState: LiveConnectionState;
   positions: Position[];
   pendingOrders: Position[];
+  mt5Positions: Position[];
   scanResults: ScanResult[];
   riskSummary: DailyRiskSummary;
   aiStatus: AIStatus;
@@ -103,6 +104,9 @@ interface TradingStore {
   scanning: boolean;
   scanLog: string[];
   fetchingAccount: boolean;
+  autoExecute: boolean;
+  executingTrade: boolean;
+  lastTradeResult: { success: boolean; symbol: string; direction: string; ticket?: number; error?: string } | null;
 
   // Actions
   connectLive: (brokerName: string, brokerId: string, mt5Server: string) => Promise<void>;
@@ -112,12 +116,16 @@ interface TradingStore {
   confirmMT5WithCredentials: (login: number, password: string, server: string) => Promise<boolean>;
   unconfirmMT5Connection: () => void;
   fetchMT5Account: () => Promise<void>;
+  fetchMT5Positions: () => Promise<void>;
   fetchAccount: () => Promise<void>;
   fetchRiskStatus: () => Promise<void>;
   fetchAIStatus: () => Promise<void>;
   scanMarkets: (symbols?: string[]) => Promise<void>;
   toggleAutoTrade: (enabled: boolean, interval?: number) => Promise<void>;
   closePosition: (ticket: number) => Promise<void>;
+  executeMT5Trade: (signal: { symbol: string; direction: "BUY" | "SELL"; volume: number; sl: number; tp: number; comment?: string }) => Promise<boolean>;
+  closeMT5Position: (ticket: number) => Promise<boolean>;
+  setAutoExecute: (enabled: boolean) => void;
   checkBackendHealth: () => Promise<boolean>;
 }
 
@@ -167,6 +175,7 @@ export const useTradingStore = create<TradingStore>((set, get) => ({
   },
   positions: [],
   pendingOrders: [],
+  mt5Positions: [],
   scanResults: [],
   riskSummary: EMPTY_RISK,
   aiStatus: EMPTY_AI,
@@ -180,6 +189,9 @@ export const useTradingStore = create<TradingStore>((set, get) => ({
   scanning: false,
   scanLog: ["System ready. Select your broker to start live trading."],
   fetchingAccount: false,
+  autoExecute: false,
+  executingTrade: false,
+  lastTradeResult: null,
 
   // ── Connect Live (MT5 Web Terminal) ────────
   connectLive: async (brokerName: string, brokerId: string, mt5Server: string) => {
@@ -511,6 +523,130 @@ export const useTradingStore = create<TradingStore>((set, get) => ({
     }
   },
 
+  // ── Fetch MT5 Positions ──────────────────────────────────
+  fetchMT5Positions: async () => {
+    const state = get();
+    if (!state.liveState.mt5Confirmed || !state.liveState.mt5Available) return;
+
+    try {
+      const res = await tradingApi.mt5Positions();
+      if (res.success && res.positions) {
+        set({ mt5Positions: res.positions.map(parsePosition) });
+      }
+    } catch {
+      // Silent fail for polling
+    }
+  },
+
+  // ── Execute MT5 Trade ──────────────────────────────────
+  executeMT5Trade: async (signal) => {
+    const state = get();
+    if (!state.liveState.mt5Confirmed) return false;
+
+    set({ executingTrade: true, lastTradeResult: null });
+    set((s) => ({ scanLog: log(s, `Executing ${signal.direction} ${signal.symbol} @ ${signal.volume} lots...`) }));
+
+    try {
+      const res = await tradingApi.mt5Trade({
+        symbol: signal.symbol,
+        direction: signal.direction,
+        volume: signal.volume,
+        sl: signal.sl,
+        tp: signal.tp,
+        comment: signal.comment || "AI Cloud Trader",
+      });
+
+      if (res.success) {
+        const ticket = res.position?.ticket || res.order;
+        set({
+          executingTrade: false,
+          lastTradeResult: {
+            success: true,
+            symbol: signal.symbol,
+            direction: signal.direction,
+            ticket,
+          },
+          scanLog: log(
+            { ...get(), executingTrade: false },
+            `✅ TRADE EXECUTED: ${signal.direction} ${signal.symbol} ${signal.volume} lots | Ticket #${ticket} | Deal #${res.deal}`
+          ),
+        });
+        // Refresh MT5 data after execution
+        get().fetchMT5Account();
+        get().fetchMT5Positions();
+        return true;
+      } else {
+        set({
+          executingTrade: false,
+          lastTradeResult: {
+            success: false,
+            symbol: signal.symbol,
+            direction: signal.direction,
+            error: res.error || "Unknown error",
+          },
+          scanLog: log(
+            { ...get(), executingTrade: false },
+            `❌ TRADE FAILED: ${signal.direction} ${signal.symbol} → ${res.error}`
+          ),
+        });
+        return false;
+      }
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : "Network error";
+      set({
+        executingTrade: false,
+        lastTradeResult: {
+          success: false,
+          symbol: signal.symbol,
+          direction: signal.direction,
+          error: msg,
+        },
+        scanLog: log(
+          { ...get(), executingTrade: false },
+          `❌ TRADE ERROR: ${signal.direction} ${signal.symbol} → ${msg}`
+        ),
+      });
+      return false;
+    }
+  },
+
+  // ── Close MT5 Position ──────────────────────────────────
+  closeMT5Position: async (ticket: number) => {
+    set((s) => ({ scanLog: log(s, `Closing MT5 position #${ticket}...`) }));
+
+    try {
+      const res = await tradingApi.mt5ClosePosition(ticket);
+      if (res.success) {
+        set((s) => ({
+          mt5Positions: s.mt5Positions.filter((p) => p.ticket !== ticket),
+          scanLog: log(
+            { ...get(), mt5Positions: [] },
+            `✅ Position #${ticket} closed | Deal #${res.deal} | P&L: $${res.profit?.toFixed(2) || "0.00"}`
+          ),
+        }));
+        get().fetchMT5Account();
+        return true;
+      } else {
+        set((s) => ({
+          scanLog: log(s, `❌ Close failed #${ticket}: ${res.error}`),
+        }));
+        return false;
+      }
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : "Network error";
+      set((s) => ({ scanLog: log(s, `❌ Close error #${ticket}: ${msg}`) }));
+      return false;
+    }
+  },
+
+  // ── Auto Execute Toggle ──────────────────────────────────
+  setAutoExecute: (enabled: boolean) => {
+    set((s) => ({
+      autoExecute: enabled,
+      scanLog: log(s, enabled ? "🔒 Auto-execute ENABLED — authorized trades will be placed automatically" : "🔓 Auto-execute DISABLED — signals shown for manual review"),
+    }));
+  },
+
   unconfirmMT5Connection: () => {
     set((s) => ({
       liveState: {
@@ -569,9 +705,13 @@ export const useTradingStore = create<TradingStore>((set, get) => ({
       },
       positions: [],
       pendingOrders: [],
+      mt5Positions: [],
       scanResults: [],
       riskSummary: EMPTY_RISK,
       autoTrade: { enabled: false, intervalMinutes: 15, symbols: ["EURUSD", "XAUUSD", "BTCUSD", "GBPUSD"], lastScan: null, cycleCount: 0 },
+      autoExecute: false,
+      executingTrade: false,
+      lastTradeResult: null,
       scanLog: log(state, "Disconnected."),
     });
   },
@@ -738,6 +878,24 @@ export const useTradingStore = create<TradingStore>((set, get) => ({
       }));
 
       get().fetchRiskStatus();
+
+      // Auto-execute actionable signals if enabled (live mode only)
+      const currentState = get();
+      if (currentState.autoExecute && currentState.connection.mode === "live" && currentState.liveState.mt5Confirmed) {
+        for (const r of results) {
+          if (r.actionable) {
+            set((s) => ({ scanLog: log(s, `Auto-executing ${r.actionable.direction} ${r.symbol}...`) }));
+            await get().executeMT5Trade({
+              symbol: r.actionable.symbol,
+              direction: r.actionable.direction,
+              volume: r.actionable.volume,
+              sl: r.actionable.sl,
+              tp: r.actionable.tp,
+              comment: `AI Auto ${r.actionable.direction} ${r.actionable.symbol}`,
+            });
+          }
+        }
+      }
     } catch (error) {
       const msg = error instanceof Error ? error.message : "Unknown error";
       set((s) => ({

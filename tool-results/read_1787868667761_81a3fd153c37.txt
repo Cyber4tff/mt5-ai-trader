@@ -1,0 +1,798 @@
+     1→import { create } from "zustand";
+     2→import type {
+     3→  ConnectionState,
+     4→  AccountInfo,
+     5→  Position,
+     6→  ScanResult,
+     7→  DailyRiskSummary,
+     8→  AIStatus,
+     9→  AutoTradeState,
+    10→  SessionMode,
+    11→} from "./trading-types";
+    12→
+    13→// ─── Live connection tracking ────────────────────────────────
+    14→export interface LiveConnectionState {
+    15→  mt5Confirmed: boolean;
+    16→  mt5Available: boolean;
+    17→  mt5Login: number | null;
+    18→  mt5Name: string;
+    19→  mt5Currency: string;
+    20→  balance: number;
+    21→  equity: number;
+    22→  profit: number;
+    23→  margin: number;
+    24→  freeMargin: number;
+    25→  marginLevel: number;
+    26→  leverage: number;
+    27→  lastFetch: string | null;
+    28→  fetchError: string | null;
+    29→  connectedAt: string | null;
+    30→}
+    31→import { getWebTerminalUrl } from "./trading-types";
+    32→import { tradingApi, type ConnectParams } from "./trading-api";
+    33→
+    34→// ─── Empty defaults (NO mock data) ────────────────────────────
+    35→
+    36→const EMPTY_ACCOUNT: AccountInfo = {
+    37→  balance: 0,
+    38→  equity: 0,
+    39→  margin: 0,
+    40→  free_margin: 0,
+    41→  leverage: 0,
+    42→  profit: 0,
+    43→  margin_level: 0,
+    44→};
+    45→
+    46→const EMPTY_RISK: DailyRiskSummary = {
+    47→  date: new Date().toISOString().split("T")[0],
+    48→  realized_pnl: 0,
+    49→  trades_count: 0,
+    50→  consecutive_losses: 0,
+    51→  remaining_trades: 0,
+    52→  remaining_loss_limit: 0,
+    53→};
+    54→
+    55→const EMPTY_AI: AIStatus = {
+    56→  strategy: "—",
+    57→  patterns: [],
+    58→  structure_analysis: [],
+    59→  mtf_timeframes: [],
+    60→  symbols_focus: [],
+    61→  brokers: [],
+    62→  confidence_threshold: 0,
+    63→  high_confidence: 0,
+    64→  risk_per_trade: 0,
+    65→  max_daily_loss_pct: 0,
+    66→  max_consecutive_losses: 0,
+    67→  max_open_positions: 0,
+    68→  max_trades_per_day: 0,
+    69→  max_spread_points: 0,
+    70→  min_risk_reward: 0,
+    71→  mode: "live",
+    72→  trailing_stop: false,
+    73→};
+    74→
+    75→const EMPTY_CONNECTION: ConnectionState = {
+    76→  connected: false,
+    77→  sessionId: null,
+    78→  broker: null,
+    79→  server: null,
+    80→  account: null,
+    81→  lastUpdate: null,
+    82→  mode: "live",
+    83→  selectedBrokerId: null,
+    84→  mt5Server: null,
+    85→  webTerminalUrl: null,
+    86→  analysisSessionId: null,
+    87→};
+    88→
+    89→// ─── Store Interface ──────────────────────────────────────
+    90→
+    91→interface TradingStore {
+    92→  // State
+    93→  backendAvailable: boolean;
+    94→  backendChecking: boolean;
+    95→  connection: ConnectionState;
+    96→  liveState: LiveConnectionState;
+    97→  positions: Position[];
+    98→  pendingOrders: Position[];
+    99→  scanResults: ScanResult[];
+   100→  riskSummary: DailyRiskSummary;
+   101→  aiStatus: AIStatus;
+   102→  autoTrade: AutoTradeState;
+   103→  scanning: boolean;
+   104→  scanLog: string[];
+   105→  fetchingAccount: boolean;
+   106→
+   107→  // Actions
+   108→  connectLive: (brokerName: string, brokerId: string, mt5Server: string) => Promise<void>;
+   109→  startPaperTrading: (balance?: number, leverage?: number) => Promise<boolean>;
+   110→  connect: (broker: string, login: number, password: string, server?: string) => Promise<boolean>;
+   111→  disconnect: () => Promise<void>;
+   112→  confirmMT5WithCredentials: (login: number, password: string, server: string) => Promise<boolean>;
+   113→  unconfirmMT5Connection: () => void;
+   114→  fetchMT5Account: () => Promise<void>;
+   115→  fetchAccount: () => Promise<void>;
+   116→  fetchRiskStatus: () => Promise<void>;
+   117→  fetchAIStatus: () => Promise<void>;
+   118→  scanMarkets: (symbols?: string[]) => Promise<void>;
+   119→  toggleAutoTrade: (enabled: boolean, interval?: number) => Promise<void>;
+   120→  closePosition: (ticket: number) => Promise<void>;
+   121→  checkBackendHealth: () => Promise<boolean>;
+   122→}
+   123→
+   124→function log(state: TradingStore, msg: string): string[] {
+   125→  const ts = new Date().toLocaleTimeString();
+   126→  return [...state.scanLog.slice(-200), `[${ts}] ${msg}`];
+   127→}
+   128→
+   129→function parsePosition(p: Record<string, unknown>): Position {
+   130→  return {
+   131→    ticket: p.ticket as number,
+   132→    symbol: (p.symbol as string) || "",
+   133→    type: ((p.type as string) || "BUY").toUpperCase() as "BUY" | "SELL",
+   134→    volume: p.volume as number,
+   135→    open_price: p.open_price as number,
+   136→    current_price: p.current_price as number,
+   137→    sl: p.sl as number,
+   138→    tp: p.tp as number,
+   139→    profit: p.profit as number,
+   140→    swap: p.swap as number,
+   141→    comment: (p.comment as string) || "",
+   142→    time: p.time as string,
+   143→  };
+   144→}
+   145→
+   146→export const useTradingStore = create<TradingStore>((set, get) => ({
+   147→  // ── Initial State ──────────────────────────────
+   148→  backendAvailable: false,
+   149→  backendChecking: false,
+   150→  connection: { ...EMPTY_CONNECTION },
+   151→  liveState: {
+   152→    mt5Confirmed: false,
+   153→    mt5Available: false,
+   154→    mt5Login: null,
+   155→    mt5Name: "",
+   156→    mt5Currency: "",
+   157→    balance: 0,
+   158→    equity: 0,
+   159→    profit: 0,
+   160→    margin: 0,
+   161→    freeMargin: 0,
+   162→    marginLevel: 0,
+   163→    leverage: 0,
+   164→    lastFetch: null,
+   165→    fetchError: null,
+   166→    connectedAt: null,
+   167→  },
+   168→  positions: [],
+   169→  pendingOrders: [],
+   170→  scanResults: [],
+   171→  riskSummary: EMPTY_RISK,
+   172→  aiStatus: EMPTY_AI,
+   173→  autoTrade: {
+   174→    enabled: false,
+   175→    intervalMinutes: 15,
+   176→    symbols: ["EURUSD", "XAUUSD", "BTCUSD", "GBPUSD"],
+   177→    lastScan: null,
+   178→    cycleCount: 0,
+   179→  },
+   180→  scanning: false,
+   181→  scanLog: ["System ready. Select your broker to start live trading."],
+   182→  fetchingAccount: false,
+   183→
+   184→  // ── Connect Live (MT5 Web Terminal) ────────
+   185→  connectLive: async (brokerName: string, brokerId: string, mt5Server: string) => {
+   186→    const webTerminalUrl = getWebTerminalUrl(brokerId, mt5Server);
+   187→    const liveId = `live-${brokerId}-${Date.now()}`;
+   188→
+   189→    // Show connected state immediately
+   190→    set({
+   191→      connection: {
+   192→        connected: true,
+   193→        sessionId: liveId,
+   194→        broker: brokerName,
+   195→        server: mt5Server,
+   196→        account: null,
+   197→        lastUpdate: new Date().toISOString(),
+   198→        mode: "live",
+   199→        selectedBrokerId: brokerId,
+   200→        mt5Server,
+   201→        webTerminalUrl,
+   202→        analysisSessionId: null,
+   203→      },
+   204→      positions: [],
+   205→      pendingOrders: [],
+   206→      scanResults: [],
+   207→      riskSummary: EMPTY_RISK,
+   208→      scanLog: [`[new Date().toLocaleTimeString()}] ✅ LIVE MODE: Connected to ${brokerName} | Server: ${mt5Server}`],
+   209→    });
+   210→
+   211→    // Create a background paper session for AI analysis
+   212→    let analysisId: string | null = null;
+   213→    try {
+   214→      const res = await tradingApi.connect({
+   215→        broker: "paper",
+   216→        account_type: "paper",
+   217→        balance: 10000,
+   218→        leverage: 100,
+   219→      });
+   220→      if (res.success) {
+   221→        analysisId = res.session_id;
+   222→      }
+   223→    } catch {
+   224→      // Analysis engine unavailable
+   225→    }
+   226→
+   227→    // Now update state with the analysis session ID
+   228→    const currentState = get();
+   229→    set({
+   230→      connection: { ...currentState.connection, analysisSessionId: analysisId },
+   231→      backendAvailable: analysisId !== null,
+   232→      scanLog: [
+   233→        ...currentState.scanLog,
+   234→        analysisId
+   235→          ? `[${new Date().toLocaleTimeString()}] AI analysis engine ready. Scan markets to get trading signals.`
+   236→          : `[${new Date().toLocaleTimeString()}] ⚠ AI engine could not start. Scanning will be unavailable.`,
+   237→      ],
+   238→    });
+   239→
+   240→    get().checkBackendHealth();
+   241→    get().fetchAIStatus();
+   242→  },
+   243→
+   244→  // ── Check Backend Health ─────────────────────────────────────────────────
+   245→  checkBackendHealth: async () => {
+   246→    set({ backendChecking: true });
+   247→    try {
+   248→      await tradingApi.getHealth();
+   249→      set({ backendAvailable: true, backendChecking: false });
+   250→      return true;
+   251→    } catch {
+   252→      set({ backendAvailable: false, backendChecking: false });
+   253→      return false;
+   254→    }
+   255→  },
+   256→
+   257→  // ── Start Paper Trading ──────────────────────────────────────────────
+   258→  startPaperTrading: async (balance = 10000, leverage = 100) => {
+   259→    const state = get();
+   260→    set((s) => ({ scanLog: log(s, `Starting paper trading... Balance: $${balance.toLocaleString()} | Leverage: 1:${leverage}`) }));
+   261→
+   262→    try {
+   263→      const res = await tradingApi.connect({
+   264→        broker: "paper",
+   265→        account_type: "paper",
+   266→        balance,
+   267→        leverage,
+   268→      });
+   269→
+   270→      if (!res.success) {
+   271→        set((s) => ({ scanLog: log(s, `Failed to start: ${JSON.stringify(res)}`) }));
+   272→        return false;
+   273→      }
+   274→
+   275→      const account: AccountInfo = {
+   276→        balance: res.account.balance,
+   277→        equity: res.account.equity,
+   278→        margin: res.account.margin || 0,
+   279→        free_margin: res.account.free_margin,
+   280→        leverage: res.account.leverage,
+   281→        profit: 0,
+   282→        margin_level: res.account.margin_level,
+   283→      };
+   284→
+   285→      const conn: ConnectionState = {
+   286→        connected: true,
+   287→        sessionId: res.session_id,
+   288→        broker: res.broker,
+   289→        server: res.server,
+   290→        account,
+   291→        lastUpdate: new Date().toISOString(),
+   292→        mode: "paper",
+   293→        selectedBrokerId: null,
+   294→        mt5Server: null,
+   295→        webTerminalUrl: null,
+   296→        analysisSessionId: res.session_id,
+   297→      };
+   298→
+   299→      set({
+   300→        connection: conn,
+   301→        backendAvailable: true,
+   302→        positions: [],
+   303→        scanResults: [],
+   304→        riskSummary: EMPTY_RISK,
+   305→        scanLog: log(
+   306→          { ...get(), connection: conn },
+   307→          `Paper trading started. Balance: $${account.balance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} | Mode: PAPER`
+   308→        ),
+   309→      });
+   310→
+   311→      get().fetchAccount();
+   312→      get().fetchRiskStatus();
+   313→      get().fetchAIStatus();
+   314→
+   315→      return true;
+   316→    } catch (error) {
+   317→      const msg = error instanceof Error ? error.message : "Unknown error";
+   318→      set((s) => ({
+   319→        backendAvailable: false,
+   320→        scanLog: log(s, `Start failed: ${msg}`),
+   321→      }));
+   322→      return false;
+   323→    }
+   324→  },
+   325→
+   326→  // ── Connect (legacy MT5 via Python backend) ──────────────────────────────────────────────
+   327→  connect: async (broker, login, password, server) => {
+   328→    const state = get();
+   329→    set((s) => ({ scanLog: log(s, `Connecting to ${broker}...`) }));
+   330→
+   331→    try {
+   332→      const res = await tradingApi.connect({
+   333→        broker: broker.toLowerCase(),
+   334→        account_type: "paper",
+   335→        login,
+   336→        password,
+   337→        server: server || undefined,
+   338→      });
+   339→
+   340→      if (!res.success) {
+   341→        set((s) => ({ scanLog: log(s, `Connection FAILED: ${JSON.stringify(res)}`) }));
+   342→        return false;
+   343→      }
+   344→
+   345→      const account: AccountInfo = {
+   346→        balance: res.account.balance,
+   347→        equity: res.account.equity,
+   348→        margin: res.account.margin || 0,
+   349→        free_margin: res.account.free_margin,
+   350→        leverage: res.account.leverage,
+   351→        profit: 0,
+   352→        margin_level: res.account.margin_level,
+   353→      };
+   354→
+   355→      const conn: ConnectionState = {
+   356→        connected: true,
+   357→        sessionId: res.session_id,
+   358→        broker: res.broker,
+   359→        server: res.server,
+   360→        account,
+   361→        lastUpdate: new Date().toISOString(),
+   362→        mode: "paper",
+   363→        selectedBrokerId: null,
+   364→        mt5Server: null,
+   365→        webTerminalUrl: null,
+   366→      };
+   367→
+   368→      set({
+   369→        connection: conn,
+   370→        backendAvailable: true,
+   371→        positions: [],
+   372→        scanResults: [],
+   373→        riskSummary: EMPTY_RISK,
+   374→        scanLog: log(
+   375→          { ...get(), connection: conn },
+   376→          `Connected to ${res.broker} (${res.server}). Balance: $${account.balance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+   377→        ),
+   378→      });
+   379→
+   380→      get().fetchAccount();
+   381→      get().fetchRiskStatus();
+   382→      get().fetchAIStatus();
+   383→
+   384→      return true;
+   385→    } catch (error) {
+   386→      const msg = error instanceof Error ? error.message : "Unknown error";
+   387→      set((s) => ({
+   388→        backendAvailable: false,
+   389→        scanLog: log(s, `Connection error: ${msg}`),
+   390→      }));
+   391→      return false;
+   392→    }
+   393→  },
+   394→
+   395→  // ── Confirm MT5 with credentials (live mode) ──────────────────────
+   396→  confirmMT5WithCredentials: async (login: number, password: string, server: string) => {
+   397→    const state = get();
+   398→    set((s) => ({ scanLog: log(s, `Connecting to MT5 account #${login}...`) }));
+   399→
+   400→    try {
+   401→      const res = await tradingApi.mt5Connect(login, password, server);
+   402→
+   403→      if (!res.success) {
+   404→        // If MT5 library is not available, fall back to manual confirmation
+   405→        if (!res.mt5_available) {
+   406→          set((s) => ({
+   407→            liveState: {
+   408→              mt5Confirmed: true,
+   409→              mt5Available: false,
+   410→              mt5Login: login,
+   411→              mt5Name: "",
+   412→              mt5Currency: "",
+   413→              balance: 0,
+   414→              equity: 0,
+   415→              profit: 0,
+   416→              margin: 0,
+   417→              freeMargin: 0,
+   418→              marginLevel: 0,
+   419→              leverage: 0,
+   420→              lastFetch: null,
+   421→              fetchError: "MT5 auto-fetch requires Windows with MT5 desktop app installed.",
+   422→              connectedAt: new Date().toISOString(),
+   423→            },
+   424→            scanLog: log(s, `⚠ MT5 direct connect unavailable (Linux server). Account #${login} confirmed — balance visible in MT5 terminal.`),
+   425→          }));
+   426→          return false;
+   427→        }
+   428→
+   429→        // MT5 available but login failed
+   430→        set((s) => ({
+   431→          scanLog: log(s, `❌ MT5 login failed: ${res.error || "Unknown error"}`),
+   432→        }));
+   433→        return false;
+   434→      }
+   435→
+   436→      // Success — account info fetched
+   437→      const acc = res.account!;
+   438→      set((s) => ({
+   439→        liveState: {
+   440→          mt5Confirmed: true,
+   441→          mt5Available: true,
+   442→          mt5Login: acc.login,
+   443→          mt5Name: acc.name,
+   444→          mt5Currency: acc.currency,
+   445→          balance: acc.balance,
+   446→          equity: acc.equity,
+   447→          profit: acc.profit,
+   448→          margin: acc.margin,
+   449→          freeMargin: acc.free_margin,
+   450→          marginLevel: acc.margin_level,
+   451→          leverage: acc.leverage,
+   452→          lastFetch: new Date().toISOString(),
+   453→          fetchError: null,
+   454→          connectedAt: new Date().toISOString(),
+   455→        },
+   456→        scanLog: log(s, `✅ MT5 connected: #${acc.login} (${acc.name}) Balance: ${acc.currency} ${acc.balance.toLocaleString(undefined, { minimumFractionDigits: 2 })}`),
+   457→      }));
+   458→      return true;
+   459→    } catch (error) {
+   460→      const msg = error instanceof Error ? error.message : "Unknown error";
+   461→      // On network error, confirm anyway (server might be restarting)
+   462→      set((s) => ({
+   463→        liveState: {
+   464→          mt5Confirmed: true,
+   465→          mt5Available: false,
+   466→          mt5Login: login,
+   467→          mt5Name: "",
+   468→          mt5Currency: "",
+   469→          balance: 0,
+   470→          equity: 0,
+   471→          profit: 0,
+   472→          margin: 0,
+   473→          freeMargin: 0,
+   474→          marginLevel: 0,
+   475→          leverage: 0,
+   476→          lastFetch: null,
+   477→          fetchError: msg,
+   478→          connectedAt: new Date().toISOString(),
+   479→        },
+   480→        scanLog: log(s, `⚠ MT5 fetch error (${msg}). Account #${login} confirmed — auto-balance disabled.`),
+   481→      }));
+   482→      return false;
+   483→    }
+   484→  },
+   485→
+   486→  // ── Fetch MT5 account data (polling) ────────────────────────────────
+   487→  fetchMT5Account: async () => {
+   488→    const state = get();
+   489→    if (!state.liveState.mt5Confirmed || !state.liveState.mt5Available) return;
+   490→
+   491→    try {
+   492→      const res = await tradingApi.mt5Account();
+   493→      if (res.success && res.account) {
+   494→        const acc = res.account;
+   495→        set((s) => ({
+   496→          liveState: {
+   497→            ...s.liveState,
+   498→            balance: acc.balance,
+   499→            equity: acc.equity,
+   500→            profit: acc.profit,
+   501→            margin: acc.margin,
+   502→            freeMargin: acc.free_margin,
+   503→            marginLevel: acc.margin_level,
+   504→            lastFetch: new Date().toISOString(),
+   505→            fetchError: null,
+   506→          },
+   507→        }));
+   508→      }
+   509→    } catch {
+   510→      // Silent fail for polling
+   511→    }
+   512→  },
+   513→
+   514→  unconfirmMT5Connection: () => {
+   515→    set((s) => ({
+   516→      liveState: {
+   517→        mt5Confirmed: false,
+   518→        mt5Available: false,
+   519→        mt5Login: null,
+   520→        mt5Name: "",
+   521→        mt5Currency: "",
+   522→        balance: 0,
+   523→        equity: 0,
+   524→        profit: 0,
+   525→        margin: 0,
+   526→        freeMargin: 0,
+   527→        marginLevel: 0,
+   528→        leverage: 0,
+   529→        lastFetch: null,
+   530→        fetchError: null,
+   531→        connectedAt: null,
+   532→      },
+   533→      autoTrade: { ...s.autoTrade, enabled: false },
+   534→      scanLog: log(s, "MT5 connection unconfirmed. Auto-trading paused."),
+   535→    }));
+   536→  },
+   537→
+   538→  // ── Disconnect ────────────────────────────────────────────────────
+   539→  disconnect: async () => {
+   540→    const state = get();
+   541→    const wasLive = state.connection.mode === "live";
+   542→
+   543→    if (state.connection.sessionId && !wasLive) {
+   544→      try {
+   545→        await tradingApi.disconnect(state.connection.sessionId);
+   546→      } catch {
+   547→        // ignore disconnect errors
+   548→      }
+   549→    }
+   550→
+   551→    set({
+   552→      connection: { ...EMPTY_CONNECTION },
+   553→      liveState: {
+   554→        mt5Confirmed: false,
+   555→        mt5Available: false,
+   556→        mt5Login: null,
+   557→        mt5Name: "",
+   558→        mt5Currency: "",
+   559→        balance: 0,
+   560→        equity: 0,
+   561→        profit: 0,
+   562→        margin: 0,
+   563→        freeMargin: 0,
+   564→        marginLevel: 0,
+   565→        leverage: 0,
+   566→        lastFetch: null,
+   567→        fetchError: null,
+   568→        connectedAt: null,
+   569→      },
+   570→      positions: [],
+   571→      pendingOrders: [],
+   572→      scanResults: [],
+   573→      riskSummary: EMPTY_RISK,
+   574→      autoTrade: { enabled: false, intervalMinutes: 15, symbols: ["EURUSD", "XAUUSD", "BTCUSD", "GBPUSD"], lastScan: null, cycleCount: 0 },
+   575→      scanLog: log(state, "Disconnected."),
+   576→    });
+   577→  },
+   578→
+   579→  // ── Fetch Account (real data from trading engine, paper mode only) ─────────────────────────────────────────────
+   580→  fetchAccount: async () => {
+   581→    const state = get();
+   582→    if (!state.connection.sessionId || state.connection.mode === "live") return;
+   583→
+   584→    set({ fetchingAccount: true });
+   585→    try {
+   586→      const data = await tradingApi.getAccount(state.connection.sessionId);
+   587→      const account: AccountInfo = {
+   588→        balance: data.balance as number,
+   589→        equity: data.equity as number,
+   590→        margin: data.margin as number,
+   591→        free_margin: data.free_margin as number,
+   592→        leverage: data.leverage as number,
+   593→        profit: data.profit as number,
+   594→        margin_level: data.margin_level as number,
+   595→      };
+   596→
+   597→      const rawPositions = (data.positions as Record<string, unknown>[]) || [];
+   598→      const rawOrders = (data.orders as Record<string, unknown>[]) || [];
+   599→
+   600→      set({
+   601→        connection: {
+   602→          ...state.connection,
+   603→          account,
+   604→          lastUpdate: new Date().toISOString(),
+   605→        },
+   606→        positions: rawPositions.map(parsePosition),
+   607→        pendingOrders: rawOrders.map(parsePosition),
+   608→        backendAvailable: true,
+   609→      });
+   610→    } catch (error) {
+   611→      const msg = error instanceof Error ? error.message : "Unknown error";
+   612→      if (!msg.includes("502") && !msg.includes("fetch")) {
+   613→        set((s) => ({ scanLog: log(s, `Account fetch error: ${msg}`) }));
+   614→      }
+   615→    } finally {
+   616→      set({ fetchingAccount: false });
+   617→    }
+   618→  },
+   619→
+   620→  // ── Fetch Risk Status (real data) ──────────────────────────────────────────────────────
+   621→  fetchRiskStatus: async () => {
+   622→    const state = get();
+   623→    if (!state.connection.sessionId || state.connection.mode === "live") return;
+   624→
+   625→    try {
+   626→      const data = await tradingApi.getRiskStatus(state.connection.sessionId);
+   627→      const risk: DailyRiskSummary = {
+   628→        date: (data.date as string) || new Date().toISOString().split("T")[0],
+   629→        realized_pnl: (data.realized_pnl as number) || 0,
+   630→        trades_count: (data.trades_count as number) || 0,
+   631→        consecutive_losses: (data.consecutive_losses as number) || 0,
+   632→        remaining_trades: (data.remaining_trades as number) || 0,
+   633→        remaining_loss_limit: (data.remaining_loss_limit as number) || 0,
+   634→      };
+   635→      set({ riskSummary: risk });
+   636→    } catch {
+   637→      // Silent fail for risk polling
+   638→    }
+   639→  },
+   640→
+   641→  // ── Fetch AI Status (real config from backend) ───────────────────────────────────────────────────
+   642→  fetchAIStatus: async () => {
+   643→    try {
+   644→      const data = await tradingApi.getAIStatus();
+   645→      set({
+   646→        aiStatus: {
+   647→          strategy: (data.strategy as string) || "—",
+   648→          patterns: (data.patterns as string[]) || [],
+   649→          structure_analysis: (data.structure_analysis as string[]) || [],
+   650→          mtf_timeframes: (data.mtf_timeframes as string[]) || [],
+   651→          symbols_focus: (data.symbols_focus as string[]) || [],
+   652→          brokers: (data.brokers as string[]) || [],
+   653→          confidence_threshold: (data.confidence_threshold as number) || 0,
+   654→          high_confidence: (data.high_confidence as number) || 0,
+   655→          risk_per_trade: (data.risk_per_trade as number) || 0,
+   656→          max_daily_loss_pct: (data.max_daily_loss_pct as number) || 0,
+   657→          max_consecutive_losses: (data.max_consecutive_losses as number) || 0,
+   658→          max_open_positions: (data.max_open_positions as number) || 0,
+   659→          max_trades_per_day: (data.max_trades_per_day as number) || 0,
+   660→          max_spread_points: (data.max_spread_points as number) || 0,
+   661→          min_risk_reward: (data.min_risk_reward as number) || 0,
+   662→          mode: "live",
+   663→          trailing_stop: (data.trailing_stop as boolean) || false,
+   664→        },
+   665→      });
+   666→    } catch {
+   667→      // Silent fail
+   668→    }
+   669→  },
+   670→
+   671→  // ── Scan Markets (real analysis from backend) ─────────────────────────────────────────────
+   672→  scanMarkets: async (symbols) => {
+   673→    const state = get();
+   674→    // Use the analysis session ID (works for both paper and live modes)
+   675→    const sessionId = state.connection.analysisSessionId || state.connection.sessionId;
+   676→    if (!sessionId) return;
+   677→
+   678→    set({ scanning: true });
+   679→    set((s) => ({ scanLog: log(s, `Scanning ${symbols?.join(", ") || "all symbols"}...`) }));
+   680→
+   681→    try {
+   682→      const data = await tradingApi.scan(
+   683→        sessionId,
+   684→        { symbols }
+   685→      );
+   686→      const rawResults = (data.results as Record<string, unknown>[]) || [];
+   687→
+   688→      const results: ScanResult[] = rawResults.map((r) => {
+   689→        const actionable = r.actionable_signal
+   690→          ? {
+   691→              symbol: (r.actionable_signal as Record<string, unknown>).symbol as string,
+   692→              direction: (r.actionable_signal as Record<string, unknown>).direction as "BUY" | "SELL" | "NO_TRADE",
+   693→              entry: (r.actionable_signal as Record<string, unknown>).entry as number,
+   694→              sl: (r.actionable_signal as Record<string, unknown>).sl as number,
+   695→              tp: (r.actionable_signal as Record<string, unknown>).tp as number,
+   696→              volume: (r.actionable_signal as Record<string, unknown>).volume as number,
+   697→              confidence: (r.actionable_signal as Record<string, unknown>).confidence as number,
+   698→              risk_reward: (r.actionable_signal as Record<string, unknown>).risk_reward as number,
+   699→              confirmation_factors: ((r.actionable_signal as Record<string, unknown>).confirmation_factors as string[]) || [],
+   700→              confluence: ((r.actionable_signal as Record<string, unknown>).confluence as ScanResult["confluence"]) || null,
+   701→            }
+   702→          : null;
+   703→
+   704→        return {
+   705→          symbol: r.symbol as string,
+   706→          confluence: (r.confluence as ScanResult["confluence"]) || null,
+   707→          decisions_count: (r.decisions_count as number) || 0,
+   708→          actionable,
+   709→          errors: (r.errors as string[]) || [],
+   710→          risk_failures: (r.risk_failures as string[]) || undefined,
+   711→          timeframes: (r.timeframes as ScanResult["timeframes"]) || {},
+   712→        };
+   713→      });
+   714→
+   715→      const actionableCount = results.filter((r) => r.actionable).length;
+   716→      const noTradeCount = results.length - actionableCount;
+   717→
+   718→      set((s) => ({
+   719→        scanResults: results,
+   720→        scanning: false,
+   721→        autoTrade: { ...s.autoTrade, lastScan: new Date().toISOString(), cycleCount: s.autoTrade.cycleCount + 1 },
+   722→        scanLog: [
+   723→          ...log(s, `Scan complete: ${actionableCount} actionable, ${noTradeCount} NO TRADE`),
+   724→          ...results.flatMap((r) => {
+   725→            const msgs: string[] = [];
+   726→            if (r.actionable) {
+   727→              msgs.push(`${r.symbol}: ACTIONABLE ${r.actionable.direction} conf=${r.actionable.confidence.toFixed(2)} R:R=${r.actionable.risk_reward.toFixed(1)}`);
+   728→            } else if (r.risk_failures?.length) {
+   729→              msgs.push(`${r.symbol}: Signal rejected → ${r.risk_failures[0]}`);
+   730→            } else if (r.errors?.length) {
+   731→              msgs.push(`${r.symbol}: Error → ${r.errors[0]}`);
+   732→            } else {
+   733→              msgs.push(`${r.symbol}: NO TRADE`);
+   734→            }
+   735→            return msgs;
+   736→          }),
+   737→        ],
+   738→      }));
+   739→
+   740→      get().fetchRiskStatus();
+   741→    } catch (error) {
+   742→      const msg = error instanceof Error ? error.message : "Unknown error";
+   743→      set((s) => ({
+   744→        scanning: false,
+   745→        scanLog: log(s, `Scan error: ${msg}`),
+   746→      }));
+   747→    }
+   748→  },
+   749→
+   750→  // ── Auto Trade ──────────────────────────────────────────────────────
+   751→  toggleAutoTrade: async (enabled, interval) => {
+   752→    const state = get();
+   753→    const intervalMin = interval ?? state.autoTrade.intervalMinutes;
+   754→    set((s) => ({
+   755→      autoTrade: { ...s.autoTrade, enabled, intervalMinutes: intervalMin },
+   756→      scanLog: log(s, `Auto-trade ${enabled ? "ENABLED" : "DISABLED"} (interval: ${intervalMin}min)`),
+   757→    }));
+   758→
+   759→    // In live mode, scanning is client-driven — no backend toggle needed
+   760→    if (state.connection.mode === "live") return;
+   761→
+   762→    const sessionId = state.connection.analysisSessionId || state.connection.sessionId;
+   763→    if (!sessionId) return;
+   764→
+   765→    try {
+   766→      await tradingApi.toggleAutoTrade(sessionId, enabled, intervalMin);
+   767→    } catch (error) {
+   768→      const msg = error instanceof Error ? error.message : "Unknown error";
+   769→      set((s) => ({ scanLog: log(s, `Auto-trade error: ${msg}`) }));
+   770→    }
+   771→  },
+   772→
+   773→  // ── Close Position (paper mode only — live trades are in the web terminal) ─────────────────
+   774→  closePosition: async (ticket: number) => {
+   775→    const state = get();
+   776→    if (!state.connection.sessionId || state.connection.mode === "live") return;
+   777→
+   778→    const pos = state.positions.find((p) => p.ticket === ticket);
+   779→    set((s) => ({ scanLog: log(s, `Closing position #${ticket}...`) }));
+   780→
+   781→    try {
+   782→      await tradingApi.closePosition(state.connection.sessionId, ticket);
+   783→      set((s) => ({
+   784→        positions: s.positions.filter((p) => p.ticket !== ticket),
+   785→        scanLog: log(
+   786→          { ...get(), positions: s.positions.filter((p) => p.ticket !== ticket) },
+   787→          `Closed #${ticket} (${pos?.symbol} ${pos?.type}) P&L: $${pos?.profit?.toFixed(2) || "0.00"}`
+   788→        ),
+   789→      }));
+   790→      get().fetchAccount();
+   791→      get().fetchRiskStatus();
+   792→    } catch (error) {
+   793→      const msg = error instanceof Error ? error.message : "Unknown error";
+   794→      set((s) => ({ scanLog: log(s, `Close failed #${ticket}: ${msg}`) }));
+   795→    }
+   796→  },
+   797→}));
+   798→

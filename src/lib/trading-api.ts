@@ -77,6 +77,42 @@ export interface MT5AccountResponse {
   error?: string;
 }
 
+export interface MT5TradeResponse {
+  success: boolean;
+  mt5_available?: boolean;
+  deal?: number;
+  order?: number;
+  price?: number;
+  volume?: number;
+  comment?: string;
+  error?: string;
+  retcode?: number;
+  position?: {
+    ticket: number;
+    symbol: string;
+    type: string;
+    volume: number;
+    open_price: number;
+    current_price: number;
+    sl: number;
+    tp: number;
+    profit: number;
+    swap: number;
+    comment: string;
+    time: string;
+  };
+}
+
+export interface MT5CloseResponse {
+  success: boolean;
+  deal?: number;
+  order?: number;
+  price?: number;
+  profit?: number;
+  error?: string;
+  retcode?: number;
+}
+
 export const tradingApi = {
   // ── Connection ──────────────────────────────────────────
   connect(data: ConnectParams) {
@@ -117,6 +153,37 @@ export const tradingApi = {
 
   mt5Disconnect() {
     return apiFetch<{ success: boolean }>("/mt5-disconnect", { method: "POST" });
+  },
+
+  // ── MT5 Trade Execution ────────────────────────────────
+  mt5Trade(data: {
+    symbol: string;
+    direction: "BUY" | "SELL";
+    volume: number;
+    sl: number;
+    tp: number;
+    comment?: string;
+  }) {
+    return apiFetch<MT5TradeResponse>("/mt5-trade", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  },
+
+  mt5ClosePosition(ticket: number) {
+    return apiFetch<MT5CloseResponse>("/mt5-close-position", {
+      method: "POST",
+      body: JSON.stringify({ ticket }),
+    });
+  },
+
+  mt5Positions() {
+    return apiFetch<{
+      success: boolean;
+      positions: Record<string, unknown>[];
+      orders: Record<string, unknown>[];
+      error?: string;
+    }>("/mt5-positions");
   },
 
   // ── Scanning ────────────────────────────────────────────

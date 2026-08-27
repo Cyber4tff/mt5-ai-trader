@@ -325,6 +325,286 @@ async def mt5_status():
     }
 
 
+class MT5TradeRequest(BaseModel):
+    symbol: str
+    direction: str  # "BUY" or "SELL"
+    volume: float
+    sl: float
+    tp: float
+    comment: Optional[str] = "AI Cloud Trader"
+
+
+class MT5CloseRequest(BaseModel):
+    ticket: int
+
+
+# ====================================================================
+# MT5 Trade Execution
+# ====================================================================
+
+
+def _execute_mt5_trade(symbol: str, direction: str, volume: float, sl: float, tp: float, comment: str) -> dict:
+    """Execute a market order on MT5."""
+    global _mt5_connected
+
+    if not MT5_AVAILABLE:
+        return {
+            "success": False,
+            "error": "MT5 library not available on this server. Trade execution requires Windows with the MT5 desktop application installed.",
+            "mt5_available": False,
+        }
+
+    if not _mt5_connected:
+        return {"success": False, "error": "Not connected to MT5. Please reconnect."}
+
+    try:
+        # Get symbol info for tick and volume constraints
+        symbol_info = mt5.symbol_info(symbol)
+        if symbol_info is None:
+            return {"success": False, "error": f"Symbol {symbol} not found on broker"}
+
+        if not symbol_info.visible:
+            if not mt5.symbol_select(symbol, True):
+                return {"success": False, "error": f"Cannot select symbol {symbol}"}
+            symbol_info = mt5.symbol_info(symbol)
+
+        tick = mt5.symbol_info_tick(symbol)
+        if tick is None:
+            return {"success": False, "error": f"Cannot get tick data for {symbol}"}
+
+        # Normalize volume to broker's step size
+        volume_step = symbol_info.volume_step
+        min_lot = symbol_info.volume_min
+        max_lot = symbol_info.volume_max
+
+        volume = round(round(volume / volume_step) * volume_step, 8)
+        volume = max(min_lot, min(max_lot, volume))
+
+        # Determine order type and price
+        if direction.upper() == "BUY":
+            order_type = mt5.ORDER_TYPE_BUY
+            price = tick.ask
+        elif direction.upper() == "SELL":
+            order_type = mt5.ORDER_TYPE_SELL
+            price = tick.bid
+        else:
+            return {"success": False, "error": f"Invalid direction: {direction}. Use BUY or SELL."}
+
+        # Determine filling mode
+        filling_type = symbol_info.filling_mode
+        if filling_type == 1:
+            type_filling = mt5.ORDER_FILLING_FOK
+        elif filling_type == 2:
+            type_filling = mt5.ORDER_FILLING_IOC
+        else:
+            type_filling = mt5.ORDER_FILLING_RETURN
+
+        request = {
+            "action": mt5.TRADE_ACTION_DEAL,
+            "symbol": symbol,
+            "volume": volume,
+            "type": order_type,
+            "price": price,
+            "sl": sl,
+            "tp": tp,
+            "deviation": 20,
+            "magic": 234000,
+            "comment": comment or "AI Cloud Trader",
+            "type_time": mt5.ORDER_TIME_GTC,
+            "type_filling": type_filling,
+        }
+
+        print(f"[MT5 Trade] Sending: {symbol} {direction} {volume} lots @ {price} SL={sl} TP={tp}")
+        result = mt5.order_send(request)
+
+        if result is None:
+            error_code = mt5.last_error()
+            error_msg = _mt5_error_message(error_code)
+            return {"success": False, "error": f"Order send failed: {error_msg}", "error_code": error_code}
+
+        if result.retcode != mt5.TRADE_RETCODE_DONE:
+            error_msg = _mt5_error_message(result.retcode)
+            return {
+                "success": False,
+                "error": error_msg,
+                "retcode": result.retcode,
+                "deal": result.deal,
+                "order": result.order,
+            }
+
+        # Get the opened position
+        position = None
+        if result.deal > 0:
+            positions = mt5.positions_get(ticket=result.order)
+            if positions and len(positions) > 0:
+                p = positions[0]
+                position = {
+                    "ticket": p.ticket,
+                    "symbol": p.symbol,
+                    "type": "BUY" if p.type == 0 else "SELL",
+                    "volume": p.volume,
+                    "open_price": p.price_open,
+                    "current_price": p.price_current,
+                    "sl": p.sl,
+                    "tp": p.tp,
+                    "profit": 0.0,
+                    "swap": 0.0,
+                    "comment": p.comment,
+                    "time": str(p.time),
+                }
+
+        print(f"[MT5 Trade] SUCCESS: Deal #{result.deal} Order #{result.order} {symbol} {direction} {volume} @ {price}")
+
+        return {
+            "success": True,
+            "deal": result.deal,
+            "order": result.order,
+            "price": result.price,
+            "volume": result.volume,
+            "comment": result.comment,
+            "position": position,
+        }
+
+    except Exception as e:
+        traceback.print_exc()
+        return {"success": False, "error": str(e)}
+
+
+def _close_mt5_position(ticket: int) -> dict:
+    """Close an MT5 position by ticket."""
+    if not MT5_AVAILABLE or not _mt5_connected:
+        return {"success": False, "error": "Not connected to MT5"}
+
+    try:
+        positions = mt5.positions_get(ticket=ticket)
+        if not positions or len(positions) == 0:
+            return {"success": False, "error": f"Position #{ticket} not found"}
+
+        pos = positions[0]
+        tick = mt5.symbol_info_tick(pos.symbol)
+        if tick is None:
+            return {"success": False, "error": f"Cannot get tick for {pos.symbol}"}
+
+        # Close with opposite direction
+        if pos.type == 0:  # BUY
+            close_type = mt5.ORDER_TYPE_SELL
+            price = tick.bid
+        else:  # SELL
+            close_type = mt5.ORDER_TYPE_BUY
+            price = tick.ask
+
+        symbol_info = mt5.symbol_info(pos.symbol)
+        filling_type = symbol_info.filling_mode
+        if filling_type == 1:
+            type_filling = mt5.ORDER_FILLING_FOK
+        elif filling_type == 2:
+            type_filling = mt5.ORDER_FILLING_IOC
+        else:
+            type_filling = mt5.ORDER_FILLING_RETURN
+
+        request = {
+            "action": mt5.TRADE_ACTION_DEAL,
+            "symbol": pos.symbol,
+            "volume": pos.volume,
+            "type": close_type,
+            "position": pos.ticket,
+            "price": price,
+            "deviation": 20,
+            "magic": 234000,
+            "comment": "Close AI Trade",
+            "type_time": mt5.ORDER_TIME_GTC,
+            "type_filling": type_filling,
+        }
+
+        print(f"[MT5 Close] Closing position #{ticket} {pos.symbol} {pos.volume} lots @ {price}")
+        result = mt5.order_send(request)
+
+        if result is None or result.retcode != mt5.TRADE_RETCODE_DONE:
+            error_code = result.retcode if result else mt5.last_error()
+            return {"success": False, "error": _mt5_error_message(error_code), "retcode": error_code}
+
+        print(f"[MT5 Close] SUCCESS: Deal #{result.deal} closed position #{ticket}")
+        return {
+            "success": True,
+            "deal": result.deal,
+            "order": result.order,
+            "price": result.price,
+            "profit": pos.profit,
+        }
+
+    except Exception as e:
+        traceback.print_exc()
+        return {"success": False, "error": str(e)}
+
+
+def _mt5_error_message(code: int) -> str:
+    """Map MT5 error codes to human-readable messages."""
+    messages = {
+        10004: "Requote",
+        10006: "Request rejected",
+        10007: "Request canceled by trader",
+        10008: "Order placed",
+        10009: "Request executed",
+        10010: "Request partially executed",
+        10011: "Request processing error",
+        10012: "Request timed out",
+        10013: "Invalid request",
+        10014: "Invalid volume",
+        10015: "Invalid price",
+        10016: "Invalid stops",
+        10017: "Trade disabled",
+        10018: "Market closed",
+        10019: "Not enough money",
+        10020: "Prices changed",
+        10021: "No quotes to process request",
+        10022: "Invalid order expiration",
+        10023: "Order state changed",
+        10024: "Too many requests",
+        10025: "No changes in request",
+        10026: "Autotrading disabled by server",
+        10027: "Autotrading disabled by client",
+        10028: "Request locked for processing",
+        10029: "Order or position frozen",
+        10030: "Invalid order filling",
+        10031: "No connection with trade server",
+        10032: "Operation allowed only for live accounts",
+        10033: "Pending orders limit reached",
+        10034: "Volume limit for symbol reached",
+        10035: "Incorrect or prohibited order type",
+        10036: "Position with specified ID already closed",
+        10038: "Close volume exceeds current position volume",
+        10039: "Close order already exists",
+        10040: "Positions limit reached",
+        10041: "Pending order activation rejected",
+        10042: "Only long positions allowed",
+        10043: "Only short positions allowed",
+        10044: "Only position close allowed",
+        10045: "Position close allowed only by FIFO rule",
+    }
+    return messages.get(code, f"MT5 error {code}")
+
+
+@app.post("/api/trading/mt5-trade")
+async def mt5_trade(req: MT5TradeRequest):
+    """Place a market order on MT5."""
+    result = _execute_mt5_trade(
+        symbol=req.symbol,
+        direction=req.direction,
+        volume=req.volume,
+        sl=req.sl,
+        tp=req.tp,
+        comment=req.comment,
+    )
+    return result
+
+
+@app.post("/api/trading/mt5-close-position")
+async def mt5_close_position(req: MT5CloseRequest):
+    """Close an MT5 position by ticket number."""
+    result = _close_mt5_position(req.ticket)
+    return result
+
+
 # ====================================================================
 # Account Endpoints
 # ====================================================================

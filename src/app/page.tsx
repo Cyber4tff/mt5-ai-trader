@@ -11,6 +11,7 @@ import { RiskPanel } from "@/components/trading/risk-panel"
 import { ScannerPanel } from "@/components/trading/scanner-panel"
 import { PositionsTable } from "@/components/trading/positions-table"
 import { ScanLog } from "@/components/trading/scan-log"
+import { MT5PositionsPanel } from "@/components/trading/mt5-positions-panel"
 import { LaunchScreen } from "@/components/trading/launch-screen"
 import { useTradingStore } from "@/lib/trading-store"
 import { TrendingUp, Wallet, RefreshCw, WifiOff } from "lucide-react"
@@ -20,16 +21,27 @@ import { Badge } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
 
 function LiveInfoBanner() {
+  const { autoExecute } = useTradingStore()
   return (
-    <div className="flex items-center gap-3 p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/20 dark:bg-emerald-500/10 dark:border-emerald-500/20">
+    <div className={cn(
+      "flex items-center gap-3 p-3 rounded-lg border",
+      autoExecute
+        ? "bg-emerald-500/10 border-emerald-500/20"
+        : "bg-emerald-500/10 border-emerald-500/20"
+    )}>
       <div className="flex-1">
         <p className="text-xs text-emerald-600 dark:text-emerald-400 font-medium">
-          MT5 Web Terminal Active — AI Scanning Enabled
+          MT5 Web Terminal Active — AI Scanning {autoExecute ? "& Auto-Execution Enabled" : "Enabled"}
         </p>
         <p className="text-[11px] text-muted-foreground mt-0.5">
-          Log in with your MT5 credentials in the terminal below. The AI engine scans markets and shows signals.
+          Log in with your MT5 credentials in the terminal below. The AI engine scans markets and {autoExecute ? "automatically executes" : "shows"} signals.
         </p>
       </div>
+      {autoExecute && (
+        <Badge className="bg-emerald-500/15 text-emerald-500 border-emerald-500/30 text-[10px] shrink-0">
+          AUTO-EXEC ON
+        </Badge>
+      )}
     </div>
   )
 }
@@ -141,7 +153,7 @@ function LiveBalanceCard() {
 }
 
 function LiveBalancePoller() {
-  const { liveState, fetchMT5Account } = useTradingStore()
+  const { liveState, fetchMT5Account, fetchMT5Positions } = useTradingStore()
 
   useEffect(() => {
     if (!liveState.mt5Confirmed || !liveState.mt5Available) return
@@ -149,10 +161,11 @@ function LiveBalancePoller() {
     // Poll every 5 seconds when MT5 auto-sync is active
     const interval = setInterval(() => {
       fetchMT5Account()
+      fetchMT5Positions()
     }, 5000)
 
     return () => clearInterval(interval)
-  }, [liveState.mt5Confirmed, liveState.mt5Available, fetchMT5Account])
+  }, [liveState.mt5Confirmed, liveState.mt5Available, fetchMT5Account, fetchMT5Positions])
 
   return null
 }
@@ -188,6 +201,7 @@ export default function Home() {
               {isLiveMode && <LiveInfoBanner />}
               {isLiveMode && <WebTerminalPanel />}
               {isLiveMode && <LiveBalanceCard />}
+              {isLiveMode && liveState.mt5Confirmed && liveState.mt5Available && <MT5PositionsPanel />}
               <LiveBalancePoller />
               {isLiveMode && <ScannerPanel />}
 
