@@ -1,0 +1,821 @@
+     1→"""MT5 connector – low-level bridge to the MetaTrader 5 terminal.
+     2→
+     3→This module provides :class:`MT5Connector`, :class:`AccountInfo`,
+     4→:class:`TradeResult`, and re-exports :class:`~models.market.SymbolSpec`.
+     5→
+     6→All contract specifications (point, tick_value, tick_size,
+     7→volume_contract_size, etc.) are fetched from the MT5 terminal at
+     8→runtime – nothing is hardcoded.
+     9→"""
+    10→
+    11→from __future__ import annotations
+    12→
+    13→import time
+    14→from dataclasses import dataclass, field
+    15→from datetime import datetime, timedelta
+    16→from typing import Dict, List, Optional
+    17→
+    18→import MetaTrader5 as mt5
+    19→import pandas as pd
+    20→
+    21→from config.settings import settings
+    22→from models.market import SymbolSpec
+    23→from utils.helpers import get_filling_mode, normalize_price, normalize_volume
+    24→from utils.logging import logger
+    25→
+    26→
+    27→# ====================================================================
+    28→# Data classes
+    29→# ====================================================================
+    30→
+    31→
+    32→@dataclass
+    33→class AccountInfo:
+    34→    """Snapshot of the currently logged-in MT5 account."""
+    35→
+    36→    balance: float
+    37→    equity: float
+    38→    margin: float
+    39→    free_margin: float
+    40→    leverage: int
+    41→    profit: float
+    42→    margin_level: float
+    43→    currency: str
+    44→    login: int
+    45→    server: str
+    46→    name: str
+    47→
+    48→
+    49→@dataclass
+    50→class TradeResult:
+    51→    """Result of an order request sent to MT5."""
+    52→
+    53→    success: bool
+    54→    ticket: Optional[int] = None
+    55→    error: Optional[str] = None
+    56→    price: Optional[float] = None
+    57→    request_dict: Optional[dict] = field(default=None, repr=False)
+    58→
+    59→
+    60→# Re-export SymbolSpec so consumers can do ``from mt5_connector import SymbolSpec``
+    61→__all__ = [
+    62→    "MT5Connector",
+    63→    "AccountInfo",
+    64→    "TradeResult",
+    65→    "SymbolSpec",
+    66→]
+    67→
+    68→
+    69→# ====================================================================
+    70→# Timeframe mapping
+    71→# ====================================================================
+    72→
+    73→_TIMEFRAME_MAP: Dict[str, int] = {
+    74→    "M1": mt5.TIMEFRAME_M1,
+    75→    "M5": mt5.TIMEFRAME_M5,
+    76→    "M15": mt5.TIMEFRAME_M15,
+    77→    "M30": mt5.TIMEFRAME_M30,
+    78→    "H1": mt5.TIMEFRAME_H1,
+    79→    "H4": mt5.TIMEFRAME_H4,
+    80→    "D1": mt5.TIMEFRAME_D1,
+    81→    "W1": mt5.TIMEFRAME_W1,
+    82→    "MN": mt5.TIMEFRAME_MN1,
+    83→}
+    84→
+    85→
+    86→# ====================================================================
+    87→# MT5Connector
+    88→# ====================================================================
+    89→
+    90→
+    91→class MT5Connector:
+    92→    """High-level wrapper around the MetaTrader5 Python API.
+    93→
+    94→    Parameters
+    95→    ----------
+    96→    broker : str
+    97→        Key into :pydata:`settings.brokers` (default ``"exness"``).
+    98→    account_type : str
+    99→        Sub-key under the broker entry (``"demo"`` or ``"real"``).
+   100→    """
+   101→
+   102→    def __init__(self, broker: str = "exness", account_type: str = "demo") -> None:
+   103→        self.broker = broker
+   104→        self.account_type = account_type
+   105→        self.broker_config = settings.brokers.get(broker, {})
+   106→        self.connected: bool = False
+   107→        self._account_info: Optional[AccountInfo] = None
+   108→
+   109→    # ----------------------------------------------------------------
+   110→    # Connection lifecycle
+   111→    # ----------------------------------------------------------------
+   112→
+   113→    def connect(
+   114→        self,
+   115→        login: int,
+   116→        password: str,
+   117→        server: Optional[str] = None,
+   118→        max_retries: int = 3,
+   119→        retry_delay: int = 5,
+   120→    ) -> bool:
+   121→        """Initialise the MT5 library and log in with retry logic.
+   122→
+   123→        Parameters
+   124→        ----------
+   125→        login :
+   126→            Account number.
+   127→        password :
+   128→            Trading password.
+   129→        server :
+   130→            Broker server name.  If *None*, derived from
+   131→            ``settings.brokers[self.broker][self.account_type]``.
+   132→        max_retries :
+   133→            Maximum login attempts.
+   134→        retry_delay :
+   135→            Seconds to sleep between retries.
+   136→
+   137→        Returns
+   138→        -------
+   139→        bool
+   140→            ``True`` if successfully connected.
+   141→        """
+   142→        if server is None:
+   143→            servers = self.broker_config.get("servers", {})
+   144→            server = servers.get(self.account_type)
+   145→            if server is None:
+   146→                logger.error(
+   147→                    "No server configured for broker=%s account_type=%s",
+   148→                    self.broker,
+   149→                    self.account_type,
+   150→                )
+   151→                return False
+   152→
+   153→        mt5_path = settings.mt5_path or None
+   154→
+   155→        # If MT5 is already initialised, shut it down first so we can
+   156→        # re-initialise with a (potentially different) path.
+   157→        if mt5.initialize():
+   158→            logger.info("MT5 already initialised – shutting down before re-init")
+   159→            mt5.shutdown()
+   160→
+   161→        if not mt5.initialize(path=mt5_path):
+   162→            logger.error("mt5.initialize() failed: {}", mt5.last_error())
+   163→            return False
+   164→
+   165→        # Retry loop for login.
+   166→        for attempt in range(1, max_retries + 1):
+   167→            logger.info(
+   168→                "Login attempt {}/{} – login={} server={}",
+   169→                attempt,
+   170→                max_retries,
+   171→                login,
+   172→                server,
+   173→            )
+   174→            authorized = mt5.login(login=int(login), password=password, server=server)
+   175→            if authorized:
+   176→                self.connected = True
+   177→                self._account_info = self.get_account_info()
+   178→                logger.info(
+   179→                    "Logged in successfully to {} (account {})",
+   180→                    server,
+   181→                    login,
+   182→                )
+   183→                return True
+   184→
+   185→            logger.warning(
+   186→                "Login attempt {}/{} failed: {}",
+   187→                attempt,
+   188→                max_retries,
+   189→                mt5.last_error(),
+   190→            )
+   191→            if attempt < max_retries:
+   192→                logger.info("Retrying in {} seconds…", retry_delay)
+   193→                time.sleep(retry_delay)
+   194→
+   195→        # All retries exhausted.
+   196→        logger.error("All {} login attempts failed.", max_retries)
+   197→        mt5.shutdown()
+   198→        return False
+   199→
+   200→    def disconnect(self) -> None:
+   201→        """Shut down the MT5 connection."""
+   202→        mt5.shutdown()
+   203→        self.connected = False
+   204→        self._account_info = None
+   205→        logger.info("Disconnected from MT5")
+   206→
+   207→    def reconnect(
+   208→        self,
+   209→        login: int,
+   210→        password: str,
+   211→        server: Optional[str] = None,
+   212→    ) -> bool:
+   213→        """Disconnect and then connect again (with retry)."""
+   214→        self.disconnect()
+   215→        return self.connect(login=login, password=password, server=server)
+   216→
+   217→    def is_connected(self) -> bool:
+   218→        """Return ``True`` if the terminal is reachable *and* we are logged in."""
+   219→        return self.connected and mt5.terminal_info() is not None
+   220→
+   221→    # ----------------------------------------------------------------
+   222→    # Account information
+   223→    # ----------------------------------------------------------------
+   224→
+   225→    def get_account_info(self) -> Optional[AccountInfo]:
+   226→        """Fetch current account information from MT5.
+   227→
+   228→        Returns ``None`` if not connected or if MT5 returns no data.
+   229→        """
+   230→        if not self.is_connected():
+   231→            logger.warning("get_account_info() called but not connected")
+   232→            return None
+   233→
+   234→        info = mt5.account_info()
+   235→        if info is None:
+   236→            logger.error("mt5.account_info() returned None: {}", mt5.last_error())
+   237→            return None
+   238→
+   239→        return AccountInfo(
+   240→            balance=info.balance,
+   241→            equity=info.equity,
+   242→            margin=info.margin,
+   243→            free_margin=info.margin_free,
+   244→            leverage=info.leverage,
+   245→            profit=info.profit,
+   246→            margin_level=info.margin_level,
+   247→            currency=info.currency,
+   248→            login=info.login,
+   249→            server=info.server,
+   250→            name=info.name,
+   251→        )
+   252→
+   253→    # ----------------------------------------------------------------
+   254→    # Symbol specification
+   255→    # ----------------------------------------------------------------
+   256→
+   257→    def get_symbol_spec(self, symbol: str) -> Optional[SymbolSpec]:
+   258→        """Build a :class:`SymbolSpec` entirely from live MT5 data.
+   259→
+   260→        If ``mt5.symbol_info()`` is ``None`` (symbol not found in
+   261→        Market Watch), a warning is logged and ``None`` is returned.
+   262→        """
+   263→        if not self.is_connected():
+   264→            logger.warning("get_symbol_spec() called but not connected")
+   265→            return None
+   266→
+   267→        sym_info = mt5.symbol_info(symbol)
+   268→        if sym_info is None:
+   269→            # Fallback: try tick-level info to at least log something useful.
+   270→            tick = mt5.symbol_info_tick(symbol)
+   271→            if tick is not None:
+   272→                logger.warning(
+   273→                    "symbol_info('%s') returned None but tick data is available. "
+   274→                    "The symbol may not be in Market Watch.",
+   275→                    symbol,
+   276→                )
+   277→            else:
+   278→                logger.warning(
+   279→                    "symbol_info('%s') and symbol_info_tick('%s') both returned None.",
+   280→                    symbol,
+   281→                    symbol,
+   282→                )
+   283→            return None
+   284→
+   285→        # Current tick for live bid/ask.
+   286→        tick = mt5.symbol_info_tick(symbol)
+   287→        bid = tick.bid if tick else sym_info.bid
+   288→        ask = tick.ask if tick else sym_info.ask
+   289→
+   290→        filling_mode = get_filling_mode(sym_info)
+   291→
+   292→        return SymbolSpec(
+   293→            name=sym_info.name,
+   294→            bid=bid,
+   295→            ask=ask,
+   296→            spread=sym_info.spread,
+   297→            point=sym_info.point,
+   298→            digits=sym_info.digits,
+   299→            trade_allowed=bool(sym_info.trade_mode != mt5.SYMBOL_TRADE_MODE_DISABLED),
+   300→            volume_min=sym_info.volume_min,
+   301→            volume_max=sym_info.volume_max,
+   302→            volume_step=sym_info.volume_step,
+   303→            tick_value=sym_info.tick_value,
+   304→            tick_size=sym_info.tick_size,
+   305→            volume_contract_size=sym_info.volume_contract_size,
+   306→            trade_mode=sym_info.trade_mode,
+   307→            filling_mode=filling_mode,
+   308→        )
+   309→
+   310→    # ----------------------------------------------------------------
+   311→    # OHLCV data
+   312→    # ----------------------------------------------------------------
+   313→
+   314→    def get_ohlcv(
+   315→        self,
+   316→        symbol: str,
+   317→        timeframe: str = "H1",
+   318→        bars: int = 500,
+   319→    ) -> Optional[pd.DataFrame]:
+   320→        """Retrieve OHLCV bars and return them as a DataFrame.
+   321→
+   322→        Parameters
+   323→        ----------
+   324→        symbol :
+   325→            Instrument name (e.g. ``"BTCUSD"``).
+   326→        timeframe :
+   327→            One of ``M1 M5 M15 M30 H1 H4 D1 W1 MN``.
+   328→        bars :
+   329→            Number of bars to fetch.
+   330→
+   331→        Returns
+   332→        -------
+   333→        pd.DataFrame | None
+   334→            DataFrame with a ``datetime`` index and columns:
+   335→            ``open, high, low, close, tick_volume, spread``.
+   336→            Returns ``None`` on failure.
+   337→        """
+   338→        tf = _TIMEFRAME_MAP.get(timeframe.upper())
+   339→        if tf is None:
+   340→            logger.error("Unknown timeframe '{}'. Valid: {}", timeframe, list(_TIMEFRAME_MAP))
+   341→            return None
+   342→
+   343→        rates = mt5.copy_rates_from_pos(symbol, tf, 0, bars)
+   344→        if rates is None or len(rates) == 0:
+   345→            logger.error(
+   346→                "copy_rates_from_pos('%s', %s, 0, %s) failed: {}",
+   347→                symbol,
+   348→                timeframe,
+   349→                bars,
+   350→                mt5.last_error(),
+   351→            )
+   352→            return None
+   353→
+   354→        df = pd.DataFrame(rates)
+   355→        df["time"] = pd.to_datetime(df["time"], unit="s")
+   356→        df.set_index("time", inplace=True)
+   357→        # Keep only the columns we want.
+   358→        df = df[["open", "high", "low", "close", "tick_volume", "spread"]]
+   359→        return df
+   360→
+   361→    # ----------------------------------------------------------------
+   362→    # Spread
+   363→    # ----------------------------------------------------------------
+   364→
+   365→    def get_current_spread_points(self, symbol: str) -> int:
+   366→        """Return the current spread in points for *symbol*.
+   367→
+   368→        Returns ``999_999`` if the information is not available.
+   369→        """
+   370→        sym_info = mt5.symbol_info(symbol)
+   371→        if sym_info is None:
+   372→            return 999_999
+   373→        return int(sym_info.spread)
+   374→
+   375→    # ----------------------------------------------------------------
+   376→    # Order placement
+   377→    # ----------------------------------------------------------------
+   378→
+   379→    def place_market_order(
+   380→        self,
+   381→        symbol: str,
+   382→        order_type: str,
+   383→        volume: float,
+   384→        sl: Optional[float] = None,
+   385→        tp: Optional[float] = None,
+   386→        comment: str = "",
+   387→        deviation: int = 20,
+   388→    ) -> TradeResult:
+   389→        """Place a market order (BUY or SELL).
+   390→
+   391→        All prices and volumes are normalised against live symbol
+   392→        specifications – nothing is hardcoded.
+   393→
+   394→        Parameters
+   395→        ----------
+   396→        symbol :
+   397→            Instrument to trade.
+   398→        order_type :
+   399→            ``"BUY"`` or ``"SELL"`` (case-insensitive).
+   400→        volume :
+   401→            Desired lot size (will be normalised).
+   402→        sl, tp :
+   403→            Stop-loss / take-profit prices (optional).
+   404→        comment :
+   405→            Order comment string.
+   406→        deviation :
+   407→            Maximum slippage in points.
+   408→
+   409→        Returns
+   410→        -------
+   411→        TradeResult
+   412→            Details of the order outcome.
+   413→        """
+   414→        # --- 1. Get live symbol spec ---
+   415→        spec = self.get_symbol_spec(symbol)
+   416→        if spec is None:
+   417→            return TradeResult(
+   418→                success=False,
+   419→                error=f"Cannot retrieve symbol spec for '{symbol}'",
+   420→            )
+   421→
+   422→        # --- 2. Determine filling mode from raw MT5 symbol_info ---
+   423→        sym_info_raw = mt5.symbol_info(symbol)
+   424→        filling_mode = get_filling_mode(sym_info_raw) if sym_info_raw else mt5.ORDER_FILLING_RETURN
+   425→
+   426→        # --- 3. Normalise volume ---
+   427→        norm_volume = normalize_volume(
+   428→            volume=volume,
+   429→            volume_step=spec.volume_step,
+   430→            volume_min=spec.volume_min,
+   431→            volume_max=spec.volume_max,
+   432→        )
+   433→
+   434→        # --- 4. Determine order direction constant and entry price ---
+   435→        order_type_upper = order_type.upper().strip()
+   436→        tick = mt5.symbol_info_tick(symbol)
+   437→        if tick is None:
+   438→            return TradeResult(
+   439→                success=False,
+   440→                error=f"Cannot get tick data for '{symbol}'",
+   441→            )
+   442→
+   443→        if order_type_upper == "BUY":
+   444→            mt5_order_type = mt5.ORDER_TYPE_BUY
+   445→            price = normalize_price(tick.ask, spec.digits)
+   446→        elif order_type_upper == "SELL":
+   447→            mt5_order_type = mt5.ORDER_TYPE_SELL
+   448→            price = normalize_price(tick.bid, spec.digits)
+   449→        else:
+   450→            return TradeResult(
+   451→                success=False,
+   452→                error=f"Invalid order_type '{order_type}'. Must be BUY or SELL.",
+   453→            )
+   454→
+   455→        # --- 5. Normalise SL / TP ---
+   456→        norm_sl = normalize_price(sl, spec.digits) if sl is not None else 0.0
+   457→        norm_tp = normalize_price(tp, spec.digits) if tp is not None else 0.0
+   458→
+   459→        # --- 6. Build the request dict ---
+   460→        request = {
+   461→            "action": mt5.TRADE_ACTION_DEAL,
+   462→            "symbol": symbol,
+   463→            "volume": norm_volume,
+   464→            "type": mt5_order_type,
+   465→            "price": price,
+   466→            "deviation": deviation,
+   467→            "magic": settings.magic_number,
+   468→            "comment": comment,
+   469→            "type_time": mt5.ORDER_TIME_GTC,
+   470→            "type_filling": filling_mode,
+   471→            "sl": norm_sl,
+   472→            "tp": norm_tp,
+   473→        }
+   474→
+   475→        logger.info(
+   476→            "Sending {} {} @ {}  vol={}  SL={}  TP={}  filling={}",
+   477→            order_type_upper,
+   478→            symbol,
+   479→            price,
+   480→            norm_volume,
+   481→            norm_sl if sl is not None else "None",
+   482→            norm_tp if tp is not None else "None",
+   483→            filling_mode,
+   484→        )
+   485→
+   486→        # --- 7. Send the order ---
+   487→        result = mt5.order_send(request)
+   488→
+   489→        if result is None:
+   490→            err = mt5.last_error()
+   491→            logger.error("order_send returned None: {}", err)
+   492→            return TradeResult(
+   493→                success=False,
+   494→                error=f"order_send returned None: {err}",
+   495→                request_dict=request,
+   496→            )
+   497→
+   498→        if result.retcode != mt5.TRADE_RETCODE_DONE:
+   499→            logger.error(
+   500→                "Order FAILED – retcode={} comment='{}' deal={}",
+   501→                result.retcode,
+   502→                result.comment,
+   503→                result.deal,
+   504→            )
+   505→            return TradeResult(
+   506→                success=False,
+   507→                ticket=result.order,
+   508→                error=f"retcode={result.retcode}: {result.comment}",
+   509→                price=result.price,
+   510→                request_dict=request,
+   511→            )
+   512→
+   513→        logger.info(
+   514→            "Order FILLED – ticket={} deal={} price={} vol={}",
+   515→            result.order,
+   516→            result.deal,
+   517→            result.price,
+   518→            result.volume,
+   519→        )
+   520→        return TradeResult(
+   521→            success=True,
+   522→            ticket=result.order,
+   523→            price=result.price,
+   524→            request_dict=request,
+   525→        )
+   526→
+   527→    # ----------------------------------------------------------------
+   528→    # Position management
+   529→    # ----------------------------------------------------------------
+   530→
+   531→    def close_position(self, ticket: int) -> TradeResult:
+   532→        """Close an open position by its ticket number.
+   533→
+   534→        Parameters
+   535→        ----------
+   536→        ticket :
+   537→            Position ticket to close.
+   538→
+   539→        Returns
+   540→        -------
+   541→        TradeResult
+   542→            Outcome of the close request.
+   543→        """
+   544→        positions = mt5.positions_get(ticket=ticket)
+   545→        if positions is None or len(positions) == 0:
+   546→            return TradeResult(
+   547→                success=False,
+   548→                error=f"Position ticket {ticket} not found",
+   549→            )
+   550→
+   551→        pos = positions[0]
+   552→        symbol = pos.symbol
+   553→
+   554→        # Determine the opposite order type.
+   555→        if pos.type == mt5.POSITION_TYPE_BUY:
+   556→            close_type = mt5.ORDER_TYPE_SELL
+   557→        else:
+   558→            close_type = mt5.ORDER_TYPE_BUY
+   559→
+   560→        # Get symbol spec for filling mode and price.
+   561→        spec = self.get_symbol_spec(symbol)
+   562→        if spec is None:
+   563→            return TradeResult(
+   564→                success=False,
+   565→                error=f"Cannot retrieve spec for '{symbol}' to close position {ticket}",
+   566→            )
+   567→
+   568→        sym_info_raw = mt5.symbol_info(symbol)
+   569→        filling_mode = get_filling_mode(sym_info_raw) if sym_info_raw else mt5.ORDER_FILLING_RETURN
+   570→
+   571→        tick = mt5.symbol_info_tick(symbol)
+   572→        if tick is None:
+   573→            return TradeResult(
+   574→                success=False,
+   575→                error=f"Cannot get tick for '{symbol}'",
+   576→            )
+   577→
+   578→        price = (
+   579→            normalize_price(tick.bid, spec.digits)
+   580→            if close_type == mt5.ORDER_TYPE_SELL
+   581→            else normalize_price(tick.ask, spec.digits)
+   582→        )
+   583→
+   584→        request = {
+   585→            "action": mt5.TRADE_ACTION_DEAL,
+   586→            "symbol": symbol,
+   587→            "volume": pos.volume,
+   588→            "type": close_type,
+   589→            "position": ticket,
+   590→            "price": price,
+   591→            "deviation": 20,
+   592→            "magic": settings.magic_number,
+   593→            "comment": "close position",
+   594→            "type_time": mt5.ORDER_TIME_GTC,
+   595→            "type_filling": filling_mode,
+   596→        }
+   597→
+   598→        logger.info("Closing position {} – {} {} @ {}", ticket, close_type, symbol, price)
+   599→
+   600→        result = mt5.order_send(request)
+   601→
+   602→        if result is None:
+   603→            err = mt5.last_error()
+   604→            logger.error("Close order_send returned None: {}", err)
+   605→            return TradeResult(success=False, error=str(err), request_dict=request)
+   606→
+   607→        if result.retcode != mt5.TRADE_RETCODE_DONE:
+   608→            logger.error(
+   609→                "Close FAILED – retcode={} comment='{}'",
+   610→                result.retcode,
+   611→                result.comment,
+   612→            )
+   613→            return TradeResult(
+   614→                success=False,
+   615→                ticket=result.order,
+   616→                error=f"retcode={result.retcode}: {result.comment}",
+   617→                price=result.price,
+   618→                request_dict=request,
+   619→            )
+   620→
+   621→        logger.info("Position {} closed – ticket={} price={}", ticket, result.order, result.price)
+   622→        return TradeResult(
+   623→            success=True,
+   624→            ticket=result.order,
+   625→            price=result.price,
+   626→            request_dict=request,
+   627→        )
+   628→
+   629→    def modify_position(
+   630→        self,
+   631→        ticket: int,
+   632→        sl: Optional[float] = None,
+   633→        tp: Optional[float] = None,
+   634→    ) -> TradeResult:
+   635→        """Modify SL/TP of an open position.
+   636→
+   637→        Parameters
+   638→        ----------
+   639→        ticket :
+   640→            Position ticket to modify.
+   641→        sl :
+   642→            New stop-loss price (``None`` = leave unchanged).
+   643→        tp :
+   644→            New take-profit price (``None`` = leave unchanged).
+   645→
+   646→        Returns
+   647→        -------
+   648→        TradeResult
+   649→            Outcome of the modify request.
+   650→        """
+   651→        positions = mt5.positions_get(ticket=ticket)
+   652→        if positions is None or len(positions) == 0:
+   653→            return TradeResult(
+   654→                success=False,
+   655→                error=f"Position ticket {ticket} not found",
+   656→            )
+   657→
+   658→        pos = positions[0]
+   659→        symbol = pos.symbol
+   660→
+   661→        spec = self.get_symbol_spec(symbol)
+   662→        if spec is None:
+   663→            return TradeResult(
+   664→                success=False,
+   665→                error=f"Cannot retrieve spec for '{symbol}' to modify position {ticket}",
+   666→            )
+   667→
+   668→        # Normalise provided prices; keep existing if None.
+   669→        norm_sl = normalize_price(sl, spec.digits) if sl is not None else pos.sl
+   670→        norm_tp = normalize_price(tp, spec.digits) if tp is not None else pos.tp
+   671→
+   672→        request = {
+   673→            "action": mt5.TRADE_ACTION_SLTP,
+   674→            "symbol": symbol,
+   675→            "position": ticket,
+   676→            "sl": norm_sl,
+   677→            "tp": norm_tp,
+   678→        }
+   679→
+   680→        logger.info(
+   681→            "Modifying position {} – SL={} TP={}",
+   682→            ticket,
+   683→            norm_sl,
+   684→            norm_tp,
+   685→        )
+   686→
+   687→        result = mt5.order_send(request)
+   688→
+   689→        if result is None:
+   690→            err = mt5.last_error()
+   691→            logger.error("Modify order_send returned None: {}", err)
+   692→            return TradeResult(success=False, error=str(err), request_dict=request)
+   693→
+   694→        if result.retcode != mt5.TRADE_RETCODE_DONE:
+   695→            logger.error(
+   696→                "Modify FAILED – retcode={} comment='{}'",
+   697→                result.retcode,
+   698→                result.comment,
+   699→            )
+   700→            return TradeResult(
+   701→                success=False,
+   702→                ticket=ticket,
+   703→                error=f"retcode={result.retcode}: {result.comment}",
+   704→                request_dict=request,
+   705→            )
+   706→
+   707→        logger.info("Position {} modified successfully – SL={} TP={}", ticket, norm_sl, norm_tp)
+   708→        return TradeResult(
+   709→            success=True,
+   710→            ticket=ticket,
+   711→            request_dict=request,
+   712→        )
+   713→
+   714→    # ----------------------------------------------------------------
+   715→    # Position / order queries
+   716→    # ----------------------------------------------------------------
+   717→
+   718→    def get_positions(self) -> List[Dict]:
+   719→        """Return all open positions as a list of dicts."""
+   720→        positions = mt5.positions_get()
+   721→        if positions is None or len(positions) == 0:
+   722→            return []
+   723→
+   724→        result = []
+   725→        for pos in positions:
+   726→            result.append(
+   727→                {
+   728→                    "ticket": pos.ticket,
+   729→                    "symbol": pos.symbol,
+   730→                    "type": "BUY" if pos.type == mt5.POSITION_TYPE_BUY else "SELL",
+   731→                    "volume": pos.volume,
+   732→                    "price_open": pos.price_open,
+   733→                    "price_current": pos.price_current,
+   734→                    "sl": pos.sl,
+   735→                    "tp": pos.tp,
+   736→                    "profit": pos.profit,
+   737→                    "comment": pos.comment,
+   738→                    "magic": pos.magic,
+   739→                    "time": pos.time,
+   740→                    "time_update": pos.time_update,
+   741→                    "identifier": pos.identifier,
+   742→                }
+   743→            )
+   744→        return result
+   745→
+   746→    def get_orders(self) -> List[Dict]:
+   747→        """Return all pending orders as a list of dicts."""
+   748→        orders = mt5.orders_get()
+   749→        if orders is None or len(orders) == 0:
+   750→            return []
+   751→
+   752→        result = []
+   753→        for order in orders:
+   754→            result.append(
+   755→                {
+   756→                    "ticket": order.ticket,
+   757→                    "symbol": order.symbol,
+   758→                    "type": order.type,
+   759→                    "volume": order.volume_initial,
+   760→                    "price": order.price_current,
+   761→                    "sl": order.sl,
+   762→                    "tp": order.tp,
+   763→                    "comment": order.comment,
+   764→                    "magic": order.magic,
+   765→                    "time_setup": order.time_setup,
+   766→                    "time_expiration": order.time_expiration,
+   767→                }
+   768→            )
+   769→        return result
+   770→
+   771→    def get_positions_by_symbol(self, symbol: str) -> List[Dict]:
+   772→        """Filter open positions to those matching *symbol*."""
+   773→        return [p for p in self.get_positions() if p["symbol"] == symbol]
+   774→
+   775→    # ----------------------------------------------------------------
+   776→    # History
+   777→    # ----------------------------------------------------------------
+   778→
+   779→    def get_history_deals(self, days: int = 1) -> List[Dict]:
+   780→        """Retrieve deal history for the last *days* days.
+   781→
+   782→        Useful for daily P&L tracking.
+   783→
+   784→        Parameters
+   785→        ----------
+   786→        days :
+   787→            Look-back window in days.
+   788→
+   789→        Returns
+   790→        -------
+   791→        list[dict]
+   792→            List of deal dictionaries.
+   793→        """
+   794→        date_from = datetime.now() - timedelta(days=days)
+   795→        deals = mt5.history_deals_get(date_from, datetime.now())
+   796→
+   797→        if deals is None or len(deals) == 0:
+   798→            return []
+   799→
+   800→        result = []
+   801→        for deal in deals:
+   802→            result.append(
+   803→                {
+   804→                    "ticket": deal.ticket,
+   805→                    "order": deal.order,
+   806→                    "symbol": deal.symbol,
+   807→                    "type": deal.type,
+   808→                    "volume": deal.volume,
+   809→                    "price": deal.price,
+   810→                    "profit": deal.profit,
+   811→                    "commission": deal.commission,
+   812→                    "swap": deal.swap,
+   813→                    "comment": deal.comment,
+   814→                    "magic": deal.magic,
+   815→                    "time": deal.time,
+   816→                    "position_id": deal.position_id,
+   817→                    "entry": deal.entry,
+   818→                }
+   819→            )
+   820→        return result
+   821→
