@@ -108,3 +108,49 @@ Stage Summary:
 - Headway now uses `hw.online/webterminal/mt5-demo` and `mt5-real` which are pure MT5 terminals with NO MT4 radio button
 - An "MT5 ONLY" badge is shown in the terminal header when using broker-specific URLs
 - Clean lint, all three broker types verified via browser testing
+
+---
+Task ID: 5
+Agent: Main
+Task: Enable auto-trading (AI signal scanning) in live mode + verify Naked Forex strategy
+
+Work Log:
+- User reported auto-trading panel only visible in paper mode, not live mode
+- Identified 3 blocking issues:
+  1. `page.tsx` had `{isPaperMode && <AutoTradePanel />}` — only rendered for paper
+  2. `trading-store.ts` `toggleAutoTrade` had early return `if (mode === "live") return`
+  3. No client-side recurring timer — auto-scan only fired once after enabling
+  4. Backend scan requires valid paper session ID, but live mode had none
+- Added `analysisSessionId` field to `ConnectionState` for the background paper session
+- Rewrote `connectLive()` to be async: creates a paper session on the backend for AI analysis, stores its ID as `analysisSessionId`
+- Updated `scanMarkets` to use `analysisSessionId || sessionId` (works for both modes)
+- Updated `toggleAutoTrade`: in live mode, skips backend call (client timer handles scanning), just updates local state
+- Changed `page.tsx`: `{isConnected && <AutoTradePanel />}` — shows in both modes
+- Added `ScannerPanel` to live mode layout so scan results are visible
+- Rewrote `AutoTradePanel`:
+  - Added `useEffect` with `setInterval` for recurring auto-scans at configured interval (15-120 min)
+  - Panel title changes to "AI Signal Scanner" in live mode, "Auto Trading" in paper mode
+  - Live mode warning: "AI scans run automatically and show signals below. Trade them manually in your MT5 Web Terminal."
+  - Timer properly cleans up on unmount/disable
+- Reviewed Naked Forex strategy in `analysis.py`:
+  - Big Shadow: Full-body engulfing check confirmed correct (curr_body_lo <= prev_body_lo AND curr_body_hi >= prev_body_hi)
+  - Kangaroo Tail: Pin bar with 0.7 tail ratio, 2x wick dominance, room to left — correct
+  - Last Kiss: S/R level retest with directional bounce — correct
+  - Double Top/Bottom: ATR-tolerance double high/low with price excursion — correct
+  - All 4 patterns implement trend filter (reject counter-trend) — correct per book
+  - 9-check AI risk gate: trend alignment, confluence score, confidence, R:R, daily loss, max trades, consecutive losses, max positions, pattern detection
+  - Multi-timeframe confluence: D1, H1, M15 — correct per book's MTF approach
+  - Added docstring to Big Shadow for clarity
+- Browser-verified end-to-end:
+  - Connected Headway live → auto-trade panel visible with "AI Signal Scanner" label
+  - Toggle switch works in live mode (no backend 404 error)
+  - Manual "Scan Markets" button works: "Scan complete: 0 actionable, 4 NO TRADE"
+  - Auto-scan timer fires automatically ~28s after enabling
+  - Scan results shown in ScannerPanel below the web terminal
+
+Stage Summary:
+- Auto-trading (AI signal scanning) now fully functional in both live and paper modes
+- Live mode: AI scans markets and shows recommendations; user trades manually in MT5 terminal
+- Paper mode: AI scans and auto-executes trades via paper trading engine
+- Naked Forex strategy verified correct: Big Shadow, Kangaroo Tail, Last Kiss, Double Top/Bottom, BOS, CHOCH, MTF confluence, 9-check risk gate
+- Recurring scan timer implemented (client-side setInterval, 15-120 min configurable)

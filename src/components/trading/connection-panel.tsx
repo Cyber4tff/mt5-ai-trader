@@ -47,7 +47,7 @@ export function ConnectionPanel() {
     setCustomServer("");
   }, []);
 
-  const handleLiveConnect = useCallback(() => {
+  const handleLiveConnect = useCallback(async () => {
     if (!selectedBroker) {
       toast.error("Please select a broker");
       return;
@@ -57,8 +57,15 @@ export function ConnectionPanel() {
       toast.error("Please select or enter a server");
       return;
     }
-    connectLive(selectedBroker.name, selectedBroker.id, server);
-    toast.success(`Opening ${selectedBroker.name} MT5 Web Terminal`);
+    setStarting(true);
+    try {
+      await connectLive(selectedBroker.name, selectedBroker.id, server);
+      toast.success(`Opening ${selectedBroker.name} MT5 Web Terminal`);
+    } catch {
+      toast.error("Failed to start AI engine");
+    } finally {
+      setStarting(false);
+    }
   }, [selectedBroker, selectedServer, customServer, connectLive]);
 
   const handleStartPaper = useCallback(async () => {

@@ -1,0 +1,862 @@
+     1→"""Complete analysis engine for cloud trading system.
+     2→
+     3→Port of the MT5 AI Trader analysis pipeline:
+     4→- ATR calculation
+     5→- Support/Resistance detection
+     6→- Market Structure (BOS, CHOCH, swing points)
+     7→- Naked Forex patterns (Big Shadow, Kangaroo Tail, Last Kiss, Double Hit)
+     8→- Multi-Timeframe confluence
+     9→- AI Decision (9-check risk gate)
+    10→
+    11→All analysis uses pandas DataFrames with columns:
+    12→  open, high, low, close, volume
+    13→"""
+    14→
+    15→from __future__ import annotations
+    16→
+    17→from typing import Dict, List, Optional, Tuple
+    18→
+    19→import numpy as np
+    20→import pandas as pd
+    21→
+    22→from engine.models import (
+    23→    MarketAnalysis,
+    24→    MarketBias,
+    25→    PatternName,
+    26→    SignalType,
+    27→    SRLevel,
+    28→    StructureBreak,
+    29→    SwingPoint,
+    30→    TradeSignal,
+    31→    TrendDirection,
+    32→)
+    33→from engine.settings import settings
+    34→
+    35→
+    36→# ====================================================================
+    37→# ATR Calculation
+    38→# ====================================================================
+    39→
+    40→
+    41→def calculate_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    42→    high = df["high"].astype(float)
+    43→    low = df["low"].astype(float)
+    44→    close = df["close"].astype(float)
+    45→    prev_close = close.shift(1)
+    46→    tr_hl = high - low
+    47→    tr_hc = (high - prev_close).abs()
+    48→    tr_lc = (low - prev_close).abs()
+    49→    true_range = pd.concat([tr_hl, tr_hc, tr_lc], axis=1).max(axis=1)
+    50→    atr = true_range.rolling(window=period, min_periods=period).mean()
+    51→    return atr
+    52→
+    53→
+    54→def calculate_atr_value(df: pd.DataFrame, period: int = 14) -> float:
+    55→    atr_series = calculate_atr(df, period=period)
+    56→    if atr_series.empty or pd.isna(atr_series.iloc[-1]):
+    57→        return 0.0
+    58→    return float(atr_series.iloc[-1])
+    59→
+    60→
+    61→# ====================================================================
+    62→# Support & Resistance Detection
+    63→# ====================================================================
+    64→
+    65→
+    66→class SupportResistanceDetector:
+    67→    def __init__(self, lookback: int = 50, min_touches: int = 2, atr_tolerance_mult: float = 0.3):
+    68→        self.lookback = lookback
+    69→        self.min_touches = min_touches
+    70→        self.atr_tolerance_mult = atr_tolerance_mult
+    71→
+    72→    def find_swing_points(self, df: pd.DataFrame, order: int = 3) -> Tuple[List[SwingPoint], List[SwingPoint]]:
+    73→        highs = df["high"].astype(float).values
+    74→        lows = df["low"].astype(float).values
+    75→        n = len(df)
+    76→
+    77→        swing_highs: List[SwingPoint] = []
+    78→        swing_lows: List[SwingPoint] = []
+    79→
+    80→        for i in range(order, n - order):
+    81→            h_slice = highs[i - order : i + order + 1]
+    82→            if highs[i] == np.max(h_slice) and np.sum(highs[i] == h_slice) == 1:
+    83→                strength = min(3, max(1, int(np.sum(highs[i] > h_slice) / 2)))
+    84→                swing_highs.append(SwingPoint(price=float(highs[i]), type="high", index=int(i), strength=strength))
+    85→
+    86→            l_slice = lows[i - order : i + order + 1]
+    87→            if lows[i] == np.min(l_slice) and np.sum(lows[i] == l_slice) == 1:
+    88→                strength = min(3, max(1, int(np.sum(lows[i] < l_slice) / 2)))
+    89→                swing_lows.append(SwingPoint(price=float(lows[i]), type="low", index=int(i), strength=strength))
+    90→
+    91→        cutoff = max(0, n - self.lookback)
+    92→        swing_highs = [p for p in swing_highs if p.index >= cutoff]
+    93→        swing_lows = [p for p in swing_lows if p.index >= cutoff]
+    94→
+    95→        return swing_highs, swing_lows
+    96→
+    97→    def detect_levels(self, df: pd.DataFrame, n_levels: int = 5) -> List[SRLevel]:
+    98→        atr = calculate_atr_value(df, period=14)
+    99→        if atr <= 0:
+   100→            atr = float((df["high"].astype(float) - df["low"].astype(float)).tail(14).mean())
+   101→        if atr <= 0:
+   102→            return []
+   103→
+   104→        tolerance = atr * self.atr_tolerance_mult
+   105→        swing_highs, swing_lows = self.find_swing_points(df)
+   106→        all_points = swing_highs + swing_lows
+   107→
+   108→        if not all_points:
+   109→            return []
+   110→
+   111→        clusters: List[List[SwingPoint]] = []
+   112→        assigned = [False] * len(all_points)
+   113→
+   114→        for i, pt in enumerate(all_points):
+   115→            if assigned[i]:
+   116→                continue
+   117→            cluster = [pt]
+   118→            assigned[i] = True
+   119→            for j in range(i + 1, len(all_points)):
+   120→                if assigned[j]:
+   121→                    continue
+   122→                if any(abs(all_points[j].price - cp.price) <= tolerance for cp in cluster):
+   123→                    cluster.append(all_points[j])
+   124→                    assigned[j] = True
+   125→            clusters.append(cluster)
+   126→
+   127→        levels: List[SRLevel] = []
+   128→        for cluster in clusters:
+   129→            if len(cluster) < self.min_touches:
+   130→                continue
+   131→            prices = np.array([p.price for p in cluster])
+   132→            avg_price = float(np.mean(prices))
+   133→            zone_high = float(np.max(prices))
+   134→            zone_low = float(np.min(prices))
+   135→            touch_count = len(cluster)
+   136→            high_count = sum(1 for p in cluster if p.type == "high")
+   137→            low_count = sum(1 for p in cluster if p.type == "low")
+   138→            level_type = "resistance" if high_count >= low_count else "support"
+   139→            strength = min(5, touch_count)
+   140→            touch_indices = [p.index for p in cluster]
+   141→
+   142→            levels.append(SRLevel(
+   143→                price=avg_price, type=level_type, strength=strength,
+   144→                touches=touch_count, touch_times=touch_indices,
+   145→                last_touch_time=float(max(touch_indices)),
+   146→                zone_high=zone_high, zone_low=zone_low,
+   147→            ))
+   148→
+   149→        levels.sort(key=lambda lv: (lv.strength, lv.touches), reverse=True)
+   150→        return levels[:n_levels]
+   151→
+   152→    def find_nearest_support(self, price: float, levels: List[SRLevel]) -> Optional[SRLevel]:
+   153→        supports = [lv for lv in levels if lv.type == "support" and lv.price < price]
+   154→        return min(supports, key=lambda lv: price - lv.price) if supports else None
+   155→
+   156→    def find_nearest_resistance(self, price: float, levels: List[SRLevel]) -> Optional[SRLevel]:
+   157→        resistances = [lv for lv in levels if lv.type == "resistance" and lv.price > price]
+   158→        return min(resistances, key=lambda lv: lv.price - price) if resistances else None
+   159→
+   160→    def is_near_level(self, price: float, level: SRLevel, atr: float) -> bool:
+   161→        if level.zone_low is not None and level.zone_high is not None:
+   162→            if level.zone_low <= price <= level.zone_high:
+   163→                return True
+   164→        tolerance = atr * self.atr_tolerance_mult
+   165→        return abs(price - level.price) <= tolerance
+   166→
+   167→
+   168→# ====================================================================
+   169→# Market Structure Analysis (BOS / CHOCH)
+   170→# ====================================================================
+   171→
+   172→
+   173→class MarketStructureAnalyzer:
+   174→    def __init__(self, swing_order: int = 3):
+   175→        self.swing_order = swing_order
+   176→
+   177→    def find_swing_points(self, df: pd.DataFrame) -> Tuple[List[SwingPoint], List[SwingPoint]]:
+   178→        highs = df["high"].astype(float).values
+   179→        lows = df["low"].astype(float).values
+   180→        n = len(df)
+   181→        order = self.swing_order
+   182→
+   183→        swing_highs: List[SwingPoint] = []
+   184→        swing_lows: List[SwingPoint] = []
+   185→
+   186→        for i in range(order, n - order):
+   187→            h_slice = highs[i - order : i + order + 1]
+   188→            if highs[i] == np.max(h_slice) and np.sum(highs[i] == h_slice) == 1:
+   189→                swing_highs.append(SwingPoint(price=float(highs[i]), type="high", index=int(i), strength=1))
+   190→
+   191→            l_slice = lows[i - order : i + order + 1]
+   192→            if lows[i] == np.min(l_slice) and np.sum(lows[i] == l_slice) == 1:
+   193→                swing_lows.append(SwingPoint(price=float(lows[i]), type="low", index=int(i), strength=1))
+   194→
+   195→        return swing_highs, swing_lows
+   196→
+   197→    def identify_structure(self, df: pd.DataFrame) -> Dict:
+   198→        swing_highs, swing_lows = self.find_swing_points(df)
+   199→        trend = self._classify_swing_pattern(swing_highs, swing_lows)
+   200→
+   201→        bos_list = self.detect_bos(df, swing_highs, swing_lows)
+   202→        choch_list = self.detect_choch(df, swing_highs, swing_lows, trend)
+   203→
+   204→        last_bos = bos_list[-1] if bos_list else None
+   205→        last_choch = choch_list[-1] if choch_list else None
+   206→
+   207→        if trend == "bullish":
+   208→            structure_label = "Bullish (HH + HL)"
+   209→        elif trend == "bearish":
+   210→            structure_label = "Bearish (LH + LL)"
+   211→        else:
+   212→            structure_label = "Ranging (mixed)"
+   213→
+   214→        if last_choch is not None:
+   215→            structure_label += f" | CHOCH {last_choch.direction}"
+   216→
+   217→        return {
+   218→            "trend": trend,
+   219→            "swing_highs": swing_highs,
+   220→            "swing_lows": swing_lows,
+   221→            "last_bos": last_bos,
+   222→            "last_choch": last_choch,
+   223→            "structure_label": structure_label,
+   224→        }
+   225→
+   226→    def detect_bos(self, df: pd.DataFrame, swing_highs: List[SwingPoint], swing_lows: List[SwingPoint]) -> List[StructureBreak]:
+   227→        if not swing_highs or not swing_lows:
+   228→            return []
+   229→
+   230→        closes = df["close"].astype(float).values
+   231→        n = len(df)
+   232→        results: List[StructureBreak] = []
+   233→        current_trend = self._classify_swing_pattern(swing_highs, swing_lows)
+   234→
+   235→        all_swings = sorted(
+   236→            [("high", s) for s in swing_highs] + [("low", s) for s in swing_lows],
+   237→            key=lambda x: x[1].index,
+   238→        )
+   239→
+   240→        last_sh: Optional[SwingPoint] = None
+   241→        last_sl: Optional[SwingPoint] = None
+   242→
+   243→        for sw_type, sw_point in all_swings:
+   244→            if sw_type == "high":
+   245→                last_sh = sw_point
+   246→            else:
+   247→                last_sl = sw_point
+   248→
+   249→            start_bar = sw_point.index + 1
+   250→            if start_bar >= n:
+   251→                continue
+   252→
+   253→            if current_trend == "bullish" and last_sh is not None:
+   254→                for bar_i in range(start_bar, n):
+   255→                    if closes[bar_i] > last_sh.price:
+   256→                        results.append(StructureBreak(
+   257→                            type="BOS", direction="bullish", price=float(closes[bar_i]),
+   258→                            time=float(bar_i), index=bar_i, from_level=last_sh.price,
+   259→                        ))
+   260→                        break
+   261→            elif current_trend == "bearish" and last_sl is not None:
+   262→                for bar_i in range(start_bar, n):
+   263→                    if closes[bar_i] < last_sl.price:
+   264→                        results.append(StructureBreak(
+   265→                            type="BOS", direction="bearish", price=float(closes[bar_i]),
+   266→                            time=float(bar_i), index=bar_i, from_level=last_sl.price,
+   267→                        ))
+   268→                        break
+   269→
+   270→        return results
+   271→
+   272→    def detect_choch(self, df: pd.DataFrame, swing_highs: List[SwingPoint], swing_lows: List[SwingPoint], current_trend: str) -> List[StructureBreak]:
+   273→        if current_trend == "ranging" or not swing_highs or not swing_lows:
+   274→            return []
+   275→
+   276→        closes = df["close"].astype(float).values
+   277→        n = len(df)
+   278→        results: List[StructureBreak] = []
+   279→
+   280→        if current_trend == "bullish" and swing_lows:
+   281→            last_sl = swing_lows[-1]
+   282→            for bar_i in range(last_sl.index + 1, n):
+   283→                if closes[bar_i] < last_sl.price:
+   284→                    results.append(StructureBreak(
+   285→                        type="CHOCH", direction="bearish", price=float(closes[bar_i]),
+   286→                        time=float(bar_i), index=bar_i, from_level=last_sl.price,
+   287→                    ))
+   288→                    break
+   289→        elif current_trend == "bearish" and swing_highs:
+   290→            last_sh = swing_highs[-1]
+   291→            for bar_i in range(last_sh.index + 1, n):
+   292→                if closes[bar_i] > last_sh.price:
+   293→                    results.append(StructureBreak(
+   294→                        type="CHOCH", direction="bullish", price=float(closes[bar_i]),
+   295→                        time=float(bar_i), index=bar_i, from_level=last_sh.price,
+   296→                    ))
+   297→                    break
+   298→
+   299→        return results
+   300→
+   301→    def identify_trend(self, df: pd.DataFrame, lookback: int = 20) -> TrendDirection:
+   302→        n = len(df)
+   303→        cutoff = max(0, n - lookback)
+   304→        swing_highs, swing_lows = self.find_swing_points(df)
+   305→        recent_highs = [s for s in swing_highs if s.index >= cutoff]
+   306→        recent_lows = [s for s in swing_lows if s.index >= cutoff]
+   307→
+   308→        if len(recent_highs) < 2 and len(recent_lows) < 2:
+   309→            return TrendDirection.RANGING
+   310→
+   311→        hh = sum(1 for i in range(1, len(recent_highs)) if recent_highs[i].price > recent_highs[i - 1].price)
+   312→        hl = sum(1 for i in range(1, len(recent_lows)) if recent_lows[i].price > recent_lows[i - 1].price)
+   313→        lh = sum(1 for i in range(1, len(recent_highs)) if recent_highs[i].price < recent_highs[i - 1].price)
+   314→        ll = sum(1 for i in range(1, len(recent_lows)) if recent_lows[i].price < recent_lows[i - 1].price)
+   315→
+   316→        bullish_score = hh + hl
+   317→        bearish_score = lh + ll
+   318→
+   319→        if bullish_score > bearish_score and bullish_score >= 1:
+   320→            return TrendDirection.UP
+   321→        if bearish_score > bullish_score and bearish_score >= 1:
+   322→            return TrendDirection.DOWN
+   323→        return TrendDirection.RANGING
+   324→
+   325→    def get_market_bias(self, df: pd.DataFrame) -> MarketBias:
+   326→        structure = self.identify_structure(df)
+   327→        trend = structure["trend"]
+   328→        last_choch = structure["last_choch"]
+   329→
+   330→        if trend == "bullish":
+   331→            if last_choch is not None and last_choch.direction == "bearish":
+   332→                return MarketBias.NEUTRAL
+   333→            return MarketBias.BULLISH
+   334→        if trend == "bearish":
+   335→            if last_choch is not None and last_choch.direction == "bullish":
+   336→                return MarketBias.NEUTRAL
+   337→            return MarketBias.BEARISH
+   338→        return MarketBias.NEUTRAL
+   339→
+   340→    @staticmethod
+   341→    def _classify_swing_pattern(swing_highs: List[SwingPoint], swing_lows: List[SwingPoint]) -> str:
+   342→        if len(swing_highs) < 2 or len(swing_lows) < 2:
+   343→            return "ranging"
+   344→
+   345→        recent_h = swing_highs[-min(3, len(swing_highs)):]
+   346→        recent_l = swing_lows[-min(3, len(swing_lows)):]
+   347→
+   348→        hh = sum(1 for i in range(1, len(recent_h)) if recent_h[i].price > recent_h[i - 1].price)
+   349→        hl = sum(1 for i in range(1, len(recent_l)) if recent_l[i].price > recent_l[i - 1].price)
+   350→        lh = sum(1 for i in range(1, len(recent_h)) if recent_h[i].price < recent_h[i - 1].price)
+   351→        ll = sum(1 for i in range(1, len(recent_l)) if recent_l[i].price < recent_l[i - 1].price)
+   352→
+   353→        bullish = hh + hl
+   354→        bearish = lh + ll
+   355→        if bullish > bearish:
+   356→            return "bullish"
+   357→        if bearish > bullish:
+   358→            return "bearish"
+   359→        return "ranging"
+   360→
+   361→
+   362→# ====================================================================
+   363→# Naked Forex Pattern Detection
+   364→# ====================================================================
+   365→
+   366→
+   367→class NakedForexStrategy:
+   368→    name: str = "naked_forex"
+   369→
+   370→    def __init__(self):
+   371→        self.config = settings.naked_forex
+   372→        self.sr_detector = SupportResistanceDetector(
+   373→            lookback=self.config["support_resistance_lookback"],
+   374→            atr_tolerance_mult=self.config.get("sr_touch_tolerance_atr_mult", 0.3),
+   375→        )
+   376→        self.structure_analyzer = MarketStructureAnalyzer()
+   377→
+   378→    def identify_trend(self, df: pd.DataFrame, lookback: Optional[int] = None) -> TrendDirection:
+   379→        if lookback is None:
+   380→            lookback = self.config["trend_lookback"]
+   381→        return self.structure_analyzer.identify_trend(df.tail(lookback))
+   382→
+   383→    def calculate_atr(self, df: pd.DataFrame, period: int = 14) -> pd.Series:
+   384→        return calculate_atr(df, period)
+   385→
+   386→    def get_latest_atr(self, df: pd.DataFrame, period: int = 14) -> float:
+   387→        return calculate_atr_value(df, period)
+   388→
+   389→    def _has_room_to_left(self, df: pd.DataFrame, idx: int) -> bool:
+   390→        min_candles = self.config["room_to_left"]
+   391→        max_candles = self.config["max_room_to_left"]
+   392→        if idx < min_candles:
+   393→            return False
+   394→
+   395→        left = df.iloc[max(0, idx - max_candles):idx]
+   396→        if len(left) == 0:
+   397→            return False
+   398→
+   399→        curr_range = float(df.iloc[idx]["high"] - df.iloc[idx]["low"])
+   400→        if curr_range == 0:
+   401→            return False
+   402→
+   403→        similar_bodies = ((abs(left["close"] - left["open"]) / curr_range) > 0.7).sum()
+   404→        return int(similar_bodies) == 0
+   405→
+   406→    def is_big_shadow(self, df: pd.DataFrame, idx: int) -> tuple:
+   407→        if idx < 1:
+   408→            return False, ""
+   409→        curr = df.iloc[idx]
+   410→        prev = df.iloc[idx - 1]
+   411→        o, h, l, c = float(curr["open"]), float(curr["high"]), float(curr["low"]), float(curr["close"])
+   412→        po, ph, pl, pc = float(prev["open"]), float(prev["high"]), float(prev["low"]), float(prev["close"])
+   413→
+   414→        curr_body_lo = min(o, c)
+   415→        curr_body_hi = max(o, c)
+   416→        prev_body_lo = min(po, pc)
+   417→        prev_body_hi = max(po, pc)
+   418→
+   419→        if curr_body_lo > prev_body_lo or curr_body_hi < prev_body_hi:
+   420→            return False, ""
+   421→
+   422→        curr_range = h - l
+   423→        prev_range = ph - pl
+   424→        if curr_range == 0 or prev_range == 0:
+   425→            return False, ""
+   426→        if curr_range < prev_range * self.config["engulfing_multiplier"]:
+   427→            return False, ""
+   428→
+   429→        body_ratio = abs(c - o) / curr_range
+   430→        if body_ratio < self.config["min_candle_body_ratio"]:
+   431→            return False, ""
+   432→        if not self._has_room_to_left(df, idx):
+   433→            return False, ""
+   434→
+   435→        return (True, "big_shadow_bullish") if c > o else (True, "big_shadow_bearish")
+   436→
+   437→    def is_kangaroo_tail(self, df: pd.DataFrame, idx: int) -> tuple:
+   438→        if idx < 1:
+   439→            return False, ""
+   440→        curr = df.iloc[idx]
+   441→        o, h, l, c = float(curr["open"]), float(curr["high"]), float(curr["low"]), float(curr["close"])
+   442→
+   443→        curr_range = h - l
+   444→        if curr_range == 0:
+   445→            return False, ""
+   446→
+   447→        body = abs(c - o)
+   448→        body_ratio = body / curr_range
+   449→        pin_tail_ratio = self.config["pin_bar_tail_ratio"]
+   450→
+   451→        if body_ratio > (1 - pin_tail_ratio):
+   452→            return False, ""
+   453→
+   454→        upper_wick = h - max(o, c)
+   455→        lower_wick = min(o, c) - l
+   456→
+   457→        if lower_wick > upper_wick:
+   458→            if lower_wick < 2 * upper_wick or lower_wick / curr_range < pin_tail_ratio:
+   459→                return False, ""
+   460→        else:
+   461→            if upper_wick < 2 * lower_wick or upper_wick / curr_range < pin_tail_ratio:
+   462→                return False, ""
+   463→
+   464→        if not self._has_room_to_left(df, idx):
+   465→            return False, ""
+   466→
+   467→        return (True, "kangaroo_tail_bullish") if lower_wick > upper_wick else (True, "kangaroo_tail_bearish")
+   468→
+   469→    def is_last_kiss(self, df: pd.DataFrame, idx: int, sr_levels: list) -> tuple:
+   470→        if idx < 3 or not sr_levels:
+   471→            return False, ""
+   472→
+   473→        atr = self.get_latest_atr(df, self.config["atr_period"])
+   474→        if atr <= 0:
+   475→            return False, ""
+   476→
+   477→        curr = df.iloc[idx]
+   478→        curr_close = float(curr["close"])
+   479→        curr_body = abs(float(curr["close"]) - float(curr["open"]))
+   480→        curr_range = float(curr["high"]) - float(curr["low"])
+   481→        if curr_range == 0:
+   482→            return False, ""
+   483→        if curr_body / curr_range < self.config["min_candle_body_ratio"]:
+   484→            return False, ""
+   485→
+   486→        for level in sr_levels:
+   487→            if not self.sr_detector.is_near_level(curr_close, level, atr):
+   488→                continue
+   489→            for lookback in range(1, 4):
+   490→                if idx - lookback < 0:
+   491→                    continue
+   492→                prev = df.iloc[idx - lookback]
+   493→                prev_close = float(prev["close"])
+   494→
+   495→                if level.type == "support":
+   496→                    if prev_close < level.price and curr_close >= level.price * 0.998:
+   497→                        if float(curr["close"]) > float(curr["open"]):
+   498→                            return True, "last_kiss_bullish"
+   499→                elif level.type == "resistance":
+   500→                    if prev_close > level.price and curr_close <= level.price * 1.002:
+   501→                        if float(curr["close"]) < float(curr["open"]):
+   502→                            return True, "last_kiss_bearish"
+   503→
+   504→        return False, ""
+   505→
+   506→    def is_double_hit(self, df: pd.DataFrame, idx: int) -> tuple:
+   507→        atr = self.get_latest_atr(df, self.config["atr_period"])
+   508→        if atr <= 0:
+   509→            return False, ""
+   510→
+   511→        curr = df.iloc[idx]
+   512→        curr_high = float(curr["high"])
+   513→        curr_low = float(curr["low"])
+   514→        tolerance = atr * 0.3
+   515→        min_lookback = 5
+   516→        max_lookback = 15
+   517→
+   518→        # Double Bottom
+   519→        for j in range(idx - max_lookback, idx - min_lookback):
+   520→            if j < 0:
+   521→                continue
+   522→            other = df.iloc[j]
+   523→            if abs(curr_low - float(other["low"])) > tolerance:
+   524→                continue
+   525→            mid_slice = df.iloc[j + 1:idx]
+   526→            if len(mid_slice) == 0:
+   527→                continue
+   528→            if float(mid_slice["high"].max()) > curr_low + tolerance:
+   529→                return True, "double_bottom"
+   530→
+   531→        # Double Top
+   532→        for j in range(idx - max_lookback, idx - min_lookback):
+   533→            if j < 0:
+   534→                continue
+   535→            other = df.iloc[j]
+   536→            if abs(curr_high - float(other["high"])) > tolerance:
+   537→                continue
+   538→            mid_slice = df.iloc[j + 1:idx]
+   539→            if len(mid_slice) == 0:
+   540→                continue
+   541→            if float(mid_slice["low"].min()) < curr_high - tolerance:
+   542→                return True, "double_top"
+   543→
+   544→        return False, ""
+   545→
+   546→    _PATTERN_MAP = {
+   547→        "big_shadow_bullish": PatternName.BIG_SHADOW_BULL,
+   548→        "big_shadow_bearish": PatternName.BIG_SHADOW_BEAR,
+   549→        "kangaroo_tail_bullish": PatternName.KANGAROO_TAIL_BULL,
+   550→        "kangaroo_tail_bearish": PatternName.KANGAROO_TAIL_BEAR,
+   551→        "last_kiss_bullish": PatternName.LAST_KISS_BULL,
+   552→        "last_kiss_bearish": PatternName.LAST_KISS_BEAR,
+   553→        "double_bottom": PatternName.DOUBLE_BOTTOM,
+   554→        "double_top": PatternName.DOUBLE_TOP,
+   555→    }
+   556→
+   557→    def _create_signal(self, df, idx, pattern_str, symbol, timeframe, sr_levels, trend) -> Optional[TradeSignal]:
+   558→        is_bullish = "bullish" in pattern_str or "bottom" in pattern_str
+   559→        is_bearish = "bearish" in pattern_str or "top" in pattern_str
+   560→
+   561→        # FIXED trend filter: allow with-trend, reject counter-trend
+   562→        if is_bullish and trend == TrendDirection.DOWN:
+   563→            return None
+   564→        if is_bearish and trend == TrendDirection.UP:
+   565→            return None
+   566→
+   567→        atr = self.get_latest_atr(df, self.config["atr_period"])
+   568→        if atr == 0:
+   569→            return None
+   570→
+   571→        candle = df.iloc[idx]
+   572→        candle_high = float(candle["high"])
+   573→        candle_low = float(candle["low"])
+   574→
+   575→        if is_bullish:
+   576→            entry = candle_high + atr * 0.1
+   577→            sl = candle_low - atr * 0.5
+   578→            nearest_sr = self.sr_detector.find_nearest_resistance(entry, sr_levels)
+   579→            tp = nearest_sr.price if nearest_sr else entry + 3 * atr
+   580→        else:
+   581→            entry = candle_low - atr * 0.1
+   582→            sl = candle_high + atr * 0.5
+   583→            nearest_sr = self.sr_detector.find_nearest_support(entry, sr_levels)
+   584→            tp = nearest_sr.price if nearest_sr else entry - 3 * atr
+   585→
+   586→        risk = abs(entry - sl)
+   587→        reward = abs(tp - entry)
+   588→        if risk == 0:
+   589→            return None
+   590→        rr = reward / risk
+   591→        if rr < settings.min_risk_reward:
+   592→            return None
+   593→
+   594→        confidence = 0.4
+   595→        if (is_bullish and trend == TrendDirection.UP) or (is_bearish and trend == TrendDirection.DOWN):
+   596→            confidence += 0.25
+   597→        elif trend == TrendDirection.RANGING:
+   598→            confidence += 0.05
+   599→        if nearest_sr:
+   600→            confidence += 0.15
+   601→        if "big_shadow" in pattern_str:
+   602→            confidence += 0.10
+   603→        elif "kangaroo" in pattern_str:
+   604→            confidence += 0.08
+   605→        elif "last_kiss" in pattern_str:
+   606→            confidence += 0.07
+   607→        elif "double" in pattern_str:
+   608→            confidence += 0.09
+   609→        confidence = min(confidence, 1.0)
+   610→
+   611→        signal_type = SignalType.BUY if is_bullish else SignalType.SELL
+   612→        pattern_enum = self._PATTERN_MAP.get(pattern_str, PatternName.NONE)
+   613→
+   614→        return TradeSignal(
+   615→            symbol=symbol, signal_type=signal_type, entry_price=entry,
+   616→            stop_loss=sl, take_profit=tp, confidence=confidence,
+   617→            pattern=pattern_enum, timeframe=timeframe,
+   618→            reason=f"{pattern_str} at {trend.value} market",
+   619→            risk_reward=rr,
+   620→        )
+   621→
+   622→    def analyze(self, df: pd.DataFrame, symbol: str, timeframe: str, sr_levels=None) -> list:
+   623→        if df is None or len(df) < 50:
+   624→            return []
+   625→
+   626→        trend = self.identify_trend(df)
+   627→        if sr_levels is None:
+   628→            sr_levels = self.sr_detector.detect_levels(df)
+   629→
+   630→        signals: list = []
+   631→        start = max(10, len(df) - 10)
+   632→        end = len(df) - 1
+   633→
+   634→        for i in range(start, end):
+   635→            for pattern_fn in [self.is_big_shadow, self.is_kangaroo_tail, self.is_double_hit]:
+   636→                valid, name = pattern_fn(df, i)
+   637→                if valid:
+   638→                    sig = self._create_signal(df, i, name, symbol, timeframe, sr_levels, trend)
+   639→                    if sig:
+   640→                        signals.append(sig)
+   641→
+   642→            valid, name = self.is_last_kiss(df, i, sr_levels)
+   643→            if valid:
+   644→                sig = self._create_signal(df, i, name, symbol, timeframe, sr_levels, trend)
+   645→                if sig:
+   646→                    signals.append(sig)
+   647→
+   648→        signals.sort(key=lambda s: s.confidence, reverse=True)
+   649→        return signals[:3]
+   650→
+   651→
+   652→# ====================================================================
+   653→# Multi-Timeframe Confluence
+   654→# ====================================================================
+   655→
+   656→_TREND_TO_CHOCH_LABEL = {
+   657→    TrendDirection.UP: "bullish",
+   658→    TrendDirection.DOWN: "bearish",
+   659→    TrendDirection.RANGING: "ranging",
+   660→}
+   661→
+   662→
+   663→class MultiTimeframeAnalyzer:
+   664→    def __init__(self):
+   665→        self.structure_analyzer = MarketStructureAnalyzer()
+   666→        self.sr_detector = SupportResistanceDetector()
+   667→        self.strategy = NakedForexStrategy()
+   668→        self.timeframes = ["1d", "1h", "15m"]
+   669→        self.tf_rank = {"1d": 0, "4h": 1, "1h": 2, "15m": 3, "5m": 4, "30m": 3.5}
+   670→
+   671→    def get_tf_rank(self, tf: str) -> float:
+   672→        return self.tf_rank.get(tf.lower(), 99)
+   673→
+   674→    def analyze_timeframe(self, df: pd.DataFrame, symbol: str, timeframe: str, sr_levels=None) -> MarketAnalysis:
+   675→        trend = self.structure_analyzer.identify_trend(df)
+   676→        bias = self.structure_analyzer.get_market_bias(df)
+   677→        atr = calculate_atr_value(df, 14)
+   678→
+   679→        # Volatility regime
+   680→        atr_series = calculate_atr(df, 14)
+   681→        atr_list = atr_series.dropna().tolist()
+   682→        vol_regime = "normal"
+   683→        if len(atr_list) >= 20:
+   684→            recent_avg = sum(atr_list[-5:]) / 5
+   685→            historical_avg = sum(atr_list[-20:]) / 20
+   686→            if historical_avg > 0:
+   687→                ratio = recent_avg / historical_avg
+   688→                if ratio > 1.5:
+   689→                    vol_regime = "high"
+   690→                elif ratio < 0.7:
+   691→                    vol_regime = "low"
+   692→
+   693→        atr_percentile = 50.0
+   694→        if len(atr_list) >= 20 and atr > 0:
+   695→            atr_percentile = sum(1 for a in atr_list if a < atr) / len(atr_list) * 100
+   696→
+   697→        if sr_levels is None:
+   698→            sr_levels = self.sr_detector.detect_levels(df)
+   699→
+   700→        swing_highs, swing_lows = self.structure_analyzer.find_swing_points(df)
+   701→        structure_breaks = self.structure_analyzer.detect_bos(df, swing_highs, swing_lows)
+   702→        choch_label = _TREND_TO_CHOCH_LABEL.get(trend, "ranging")
+   703→        structure_breaks += self.structure_analyzer.detect_choch(df, swing_highs, swing_lows, choch_label)
+   704→
+   705→        signals = self.strategy.analyze(df, symbol, timeframe, sr_levels=sr_levels)
+   706→
+   707→        sma20 = df["close"].tail(20).mean()
+   708→        current = df.iloc[-1]["close"]
+   709→        momentum = "bullish" if current > sma20 else "bearish"
+   710→
+   711→        return MarketAnalysis(
+   712→            timeframe=timeframe, trend=trend, bias=bias, atr=atr,
+   713→            atr_percentile=atr_percentile, volatility_regime=vol_regime,
+   714→            structure_breaks=structure_breaks, sr_levels=sr_levels,
+   715→            momentum=momentum, signals=signals,
+   716→        )
+   717→
+   718→    def compute_confluence(self, analyses: Dict[str, MarketAnalysis]) -> dict:
+   719→        if not analyses:
+   720→            return {"direction": "neutral", "score": 0.0, "higher_tf_bias": MarketBias.NEUTRAL, "trend_alignment": False, "factors": ["No data"], "bullish_ratio": 0.0, "bearish_ratio": 0.0}
+   721→
+   722→        sorted_tfs = sorted(analyses.keys(), key=lambda t: self.get_tf_rank(t))
+   723→        bullish_count = 0
+   724→        bearish_count = 0
+   725→        total = len(sorted_tfs)
+   726→        factors = []
+   727→
+   728→        for tf in sorted_tfs:
+   729→            analysis = analyses[tf]
+   730→            if analysis.bias == MarketBias.BULLISH:
+   731→                bullish_count += 1
+   732→                factors.append(f"{tf}: bullish bias")
+   733→            elif analysis.bias == MarketBias.BEARISH:
+   734→                bearish_count += 1
+   735→                factors.append(f"{tf}: bearish bias")
+   736→            else:
+   737→                factors.append(f"{tf}: neutral")
+   738→
+   739→        higher_tf_bias = MarketBias.NEUTRAL
+   740→        for tf in sorted_tfs:
+   741→            if analyses[tf].bias != MarketBias.NEUTRAL:
+   742→                higher_tf_bias = analyses[tf].bias
+   743→                break
+   744→
+   745→        if bullish_count > bearish_count and bullish_count >= total * 0.6:
+   746→            direction = "bullish"
+   747→        elif bearish_count > bullish_count and bearish_count >= total * 0.6:
+   748→            direction = "bearish"
+   749→        else:
+   750→            direction = "neutral"
+   751→
+   752→        score = max(bullish_count, bearish_count) / total if total > 0 else 0
+   753→        trend_alignment = (bullish_count == total) or (bearish_count == total)
+   754→
+   755→        return {
+   756→            "direction": direction, "score": score, "higher_tf_bias": higher_tf_bias,
+   757→            "trend_alignment": trend_alignment, "factors": factors,
+   758→            "bullish_ratio": bullish_count / total if total else 0,
+   759→            "bearish_ratio": bearish_count / total if total else 0,
+   760→        }
+   761→
+   762→
+   763→# ====================================================================
+   764→# AI Decision Engine (9-Check Risk Gate)
+   765→# ====================================================================
+   766→
+   767→
+   768→class AIDecisionEngine:
+   769→    """9-check risk gate. Strict NO TRADE default."""
+   770→
+   771→    def __init__(self):
+   772→        self.settings = settings
+   773→
+   774→    def evaluate(self, signal: TradeSignal, confluence: dict, session: object) -> dict:
+   775→        """Run 9 risk checks. Returns decision dict."""
+   776→        checks_passed = []
+   777→        checks_failed = []
+   778→
+   779→        # 1. Trend alignment
+   780→        if confluence.get("trend_alignment"):
+   781→            checks_passed.append("All TFs aligned")
+   782→        else:
+   783→            checks_failed.append("Insufficient TF alignment")
+   784→
+   785→        # 2. Confluence score
+   786→        if confluence.get("score", 0) >= 0.6:
+   787→            checks_passed.append(f"Confluence {confluence['score']:.0%}")
+   788→        else:
+   789→            checks_failed.append(f"Low confluence {confluence.get('score', 0):.0%}")
+   790→
+   791→        # 3. Confidence threshold
+   792→        if signal.confidence >= self.settings.ai_confidence_threshold:
+   793→            checks_passed.append(f"Confidence {signal.confidence:.0%}")
+   794→        else:
+   795→            checks_failed.append(f"Low confidence {signal.confidence:.0%}")
+   796→
+   797→        # 4. Risk/Reward minimum
+   798→        if signal.risk_reward >= self.settings.min_risk_reward:
+   799→            checks_passed.append(f"R:R {signal.risk_reward:.1f}")
+   800→        else:
+   801→            checks_failed.append(f"R:R {signal.risk_reward:.1f} < {self.settings.min_risk_reward}")
+   802→
+   803→        # 5. Daily loss limit
+   804→        from engine.models import TradingSession
+   805→        if isinstance(session, TradingSession):
+   806→            session.reset_daily_risk()
+   807→            if session.daily_risk.realized_pnl >= -session.initial_balance * self.settings.max_daily_drawdown_pct:
+   808→                checks_passed.append("Within daily loss limit")
+   809→            else:
+   810→                checks_failed.append("Daily loss limit reached")
+   811→
+   812→        # 6. Max daily trades
+   813→        if isinstance(session, TradingSession):
+   814→            if session.daily_risk.trades_count < self.settings.max_trades_per_day:
+   815→                checks_passed.append(f"Trades {session.daily_risk.trades_count}/{self.settings.max_trades_per_day}")
+   816→            else:
+   817→                checks_failed.append("Max daily trades reached")
+   818→
+   819→        # 7. Consecutive losses
+   820→        if isinstance(session, TradingSession):
+   821→            if session.daily_risk.consecutive_losses < self.settings.max_consecutive_losses:
+   822→                checks_passed.append(f"Consec losses {session.daily_risk.consecutive_losses}/{self.settings.max_consecutive_losses}")
+   823→            else:
+   824→                checks_failed.append(f"Max consecutive losses ({session.daily_risk.consecutive_losses})")
+   825→
+   826→        # 8. Max open positions
+   827→        if isinstance(session, TradingSession):
+   828→            if len(session.positions) < self.settings.max_open_positions:
+   829→                checks_passed.append(f"Positions {len(session.positions)}/{self.settings.max_open_positions}")
+   830→            else:
+   831→                checks_failed.append("Max open positions")
+   832→
+   833→        # 9. Pattern detection
+   834→        if signal.pattern != PatternName.NONE:
+   835→            checks_passed.append(f"Pattern: {signal.pattern.value}")
+   836→        else:
+   837→            checks_failed.append("No pattern detected")
+   838→
+   839→        # Decision
+   840→        all_passed = len(checks_failed) == 0
+   841→
+   842→        if all_passed:
+   843→            direction = signal.signal_type.value
+   844→            high_conf = signal.confidence >= self.settings.ai_high_confidence
+   845→        else:
+   846→            direction = "NO_TRADE"
+   847→            high_conf = False
+   848→
+   849→        return {
+   850→            "direction": direction,
+   851→            "confidence": signal.confidence,
+   852→            "market_bias": confluence.get("higher_tf_bias", MarketBias.NEUTRAL),
+   853→            "entry_zone": (signal.entry_price, signal.stop_loss, signal.take_profit),
+   854→            "stop_loss": signal.stop_loss,
+   855→            "take_profit": signal.take_profit,
+   856→            "risk_reward": signal.risk_reward,
+   857→            "confirmation_factors": checks_passed,
+   858→            "rejection_reasons": checks_failed,
+   859→            "all_checks_passed": all_passed,
+   860→            "high_confidence": high_conf,
+   861→        }
+   862→

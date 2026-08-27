@@ -392,7 +392,7 @@ class NakedForexStrategy:
         if idx < min_candles:
             return False
 
-        left = df.iloc[max(0, idx - max_candles):idx]
+        left = df.ilocax(0, idx - max_candles):idx]
         if len(left) == 0:
             return False
 
@@ -404,11 +404,6 @@ class NakedForexStrategy:
         return int(similar_bodies) == 0
 
     def is_big_shadow(self, df: pd.DataFrame, idx: int) -> tuple:
-        """Naked Forex 'Big Shadow' — a strong engulfing candle whose body
-        completely contains the previous candle's body. Must have room to
-        the left (no similar-sized bodies nearby) and be at least 1.2x the
-        previous candle's range.
-        """
         if idx < 1:
             return False, ""
         curr = df.iloc[idx]
@@ -421,11 +416,9 @@ class NakedForexStrategy:
         prev_body_lo = min(po, pc)
         prev_body_hi = max(po, pc)
 
-        # Full engulfing: current body must COMPLETELY contain previous body
         if curr_body_lo > prev_body_lo or curr_body_hi < prev_body_hi:
             return False, ""
 
-        # Current candle must be significantly larger (at least 1.2x range)
         curr_range = h - l
         prev_range = ph - pl
         if curr_range == 0 or prev_range == 0:
@@ -433,11 +426,9 @@ class NakedForexStrategy:
         if curr_range < prev_range * self.config["engulfing_multiplier"]:
             return False, ""
 
-        # Body must be substantial (>= 60% of total range, not a doji)
         body_ratio = abs(c - o) / curr_range
         if body_ratio < self.config["min_candle_body_ratio"]:
             return False, ""
-        # Room to left: no similar-sized candles in recent history
         if not self._has_room_to_left(df, idx):
             return False, ""
 

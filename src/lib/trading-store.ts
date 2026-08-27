@@ -64,6 +64,7 @@ const EMPTY_CONNECTION: ConnectionState = {
   selectedBrokerId: null,
   mt5Server: null,
   webTerminalUrl: null,
+  analysisSessionId: null,
 };
 
 // ─── Store Interface ──────────────────────────────────────
@@ -84,7 +85,7 @@ interface TradingStore {
   fetchingAccount: boolean;
 
   // Actions
-  connectLive: (brokerName: string, brokerId: string, mt5Server: string) => void;
+  connectLive: (brokerName: string, brokerId: string, mt5Server: string) => Promise<void>;
   startPaperTrading: (balance?: number, leverage?: number) => Promise<boolean>;
   connect: (broker: string, login: number, password: string, server?: string) => Promise<boolean>;
   disconnect: () => Promise<void>;
@@ -141,34 +142,61 @@ export const useTradingStore = create<TradingStore>((set, get) => ({
   fetchingAccount: false,
 
   // ── Connect Live (MT5 Web Terminal) ────────
-  connectLive: (brokerName: string, brokerId: string, mt5Server: string) => {
+  connectLive: async (brokerName: string, brokerId: string, mt5Server: string) => {
     const webTerminalUrl = getWebTerminalUrl(brokerId, mt5Server);
-    const conn: ConnectionState = {
-      connected: true,
-      sessionId: `live-${brokerId}-${Date.now()}`,
-      broker: brokerName,
-      server: mt5Server,
-      account: null, // Real account data shown in the web terminal
-      lastUpdate: new Date().toISOString(),
-      mode: "live",
-      selectedBrokerId: brokerId,
-      mt5Server,
-      webTerminalUrl,
-    };
+    const liveId = `live-${brokerId}-${Date.now()}`;
 
+    // Show connected state immediately
     set({
-      connection: conn,
+      connection: {
+        connected: true,
+        sessionId: liveId,
+        broker: brokerName,
+        server: mt5Server,
+        account: null,
+        lastUpdate: new Date().toISOString(),
+        mode: "live",
+        selectedBrokerId: brokerId,
+        mt5Server,
+        webTerminalUrl,
+        analysisSessionId: null,
+      },
       positions: [],
       pendingOrders: [],
       scanResults: [],
       riskSummary: EMPTY_RISK,
-      scanLog: log(
-        { ...get(), connection: conn },
-        `✅ LIVE MODE: Connected to ${brokerName} | Server: ${mt5Server} | Log in to your account in the MT5 Web Terminal below.`
-      ),
+      scanLog: [`[new Date().toLocaleTimeString()}] ✅ LIVE MODE: Connected to ${brokerName} | Server: ${mt5Server}`],
     });
 
-    // Try to start paper engine for AI analysis
+    // Create a background paper session for AI analysis
+    let analysisId: string | null = null;
+    try {
+      const res = await tradingApi.connect({
+        broker: "paper",
+        account_type: "paper",
+        balance: 10000,
+        leverage: 100,
+      });
+      if (res.success) {
+        analysisId = res.session_id;
+      }
+    } catch {
+      // Analysis engine unavailable
+    }
+
+    // Now update state with the analysis session ID
+    const currentState = get();
+    set({
+      connection: { ...currentState.connection, analysisSessionId: analysisId },
+      backendAvailable: analysisId !== null,
+      scanLog: [
+        ...currentState.scanLog,
+        analysisId
+          ? `[${new Date().toLocaleTimeString()}] AI analysis engine ready. Scan markets to get trading signals.`
+          : `[${new Date().toLocaleTimeString()}] ⚠ AI engine could not start. Scanning will be unavailable.`,
+      ],
+    });
+
     get().checkBackendHealth();
     get().fetchAIStatus();
   },
@@ -225,6 +253,7 @@ export const useTradingStore = create<TradingStore>((set, get) => ({
         selectedBrokerId: null,
         mt5Server: null,
         webTerminalUrl: null,
+        analysisSessionId: res.session_id,
       };
 
       set({
@@ -442,23 +471,16 @@ export const useTradingStore = create<TradingStore>((set, get) => ({
   // ── Scan Markets (real analysis from backend) ─────────────────────────────────────────────
   scanMarkets: async (symbols) => {
     const state = get();
-    if (!state.connection.sessionId) return;
-
-    // In live mode, scan uses paper engine for AI analysis only
-    const sessionId = state.connection.mode === "live" ? undefined : state.connection.sessionId;
-    if (state.connection.mode === "live" && !state.backendAvailable) {
-      set((s) => ({
-        scanLog: log(s, "Scan requires the AI analysis engine. Please wait for it to start."),
-      }));
-      return;
-    }
+    // Use the analysis session ID (works for both paper and live modes)
+    const sessionId = state.connection.analysisSessionId || state.connection.sessionId;
+    if (!sessionId) return;
 
     set({ scanning: true });
     set((s) => ({ scanLog: log(s, `Scanning ${symbols?.join(", ") || "all symbols"}...`) }));
 
     try {
       const data = await tradingApi.scan(
-        sessionId || state.connection.sessionId!,
+        sessionId,
         { symbols }
       );
       const rawResults = (data.results as Record<string, unknown>[]) || [];
@@ -528,25 +550,27 @@ export const useTradingStore = create<TradingStore>((set, get) => ({
   // ── Auto Trade ──────────────────────────────────────────────────────
   toggleAutoTrade: async (enabled, interval) => {
     const state = get();
-    if (!state.connection.sessionId || state.connection.mode === "live") return;
-
     const intervalMin = interval ?? state.autoTrade.intervalMinutes;
     set((s) => ({
+      autoTrade: { ...s.autoTrade, enabled, intervalMinutes: intervalMin },
       scanLog: log(s, `Auto-trade ${enabled ? "ENABLED" : "DISABLED"} (interval: ${intervalMin}min)`),
     }));
 
+    // In live mode, scanning is client-driven — no backend toggle needed
+    if (state.connection.mode === "live") return;
+
+    const sessionId = state.connection.analysisSessionId || state.connection.sessionId;
+    if (!sessionId) return;
+
     try {
-      await tradingApi.toggleAutoTrade(state.connection.sessionId, enabled, intervalMin);
-      set((s) => ({
-        autoTrade: { ...s.autoTrade, enabled, intervalMinutes: intervalMin },
-      }));
+      await tradingApi.toggleAutoTrade(sessionId, enabled, intervalMin);
     } catch (error) {
       const msg = error instanceof Error ? error.message : "Unknown error";
       set((s) => ({ scanLog: log(s, `Auto-trade error: ${msg}`) }));
     }
   },
 
-  // ── Close Position ──────────────────────────────────────────────────────
+  // ── Close Position (paper mode only — live trades are in the web terminal) ─────────────────
   closePosition: async (ticket: number) => {
     const state = get();
     if (!state.connection.sessionId || state.connection.mode === "live") return;

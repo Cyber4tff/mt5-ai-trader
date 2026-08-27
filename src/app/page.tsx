@@ -18,10 +18,10 @@ function LiveInfoBanner() {
     <div className="flex items-center gap-3 p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/20 mb-4">
       <div className="flex-1">
         <p className="text-xs text-emerald-400 font-medium">
-          MT5 Web Terminal Active
+          MT5 Web Terminal Active — AI Scanning Enabled
         </p>
         <p className="text-[11px] text-zinc-400 mt-0.5">
-          Log in with your MT5 credentials in the terminal below. Your account data, positions, and trades are managed directly by your broker.
+          Log in with your MT5 credentials in the terminal below. The AI engine scans markets and shows signals — trade them manually in the terminal.
         </p>
       </div>
     </div>
@@ -48,14 +48,15 @@ export default function Home() {
             <ConnectionPanel />
             {/* Show AI analysis panels in sidebar for both modes */}
             <AIStatusPanel />
-            {isPaperMode && <AutoTradePanel />}
+            {isConnected && <AutoTradePanel />}
           </div>
 
           {/* Main content - 9 cols on lg */}
           <div className="lg:col-span-9 space-y-4 md:space-y-6">
-            {/* LIVE MODE: Show MT5 Web Terminal */}
+            {/* LIVE MODE: Show MT5 Web Terminal + Scanner */}
             {isLiveMode && <LiveInfoBanner />}
             {isLiveMode && <WebTerminalPanel />}
+            {isLiveMode && <ScannerPanel />}
 
             {/* PAPER MODE: Show account cards, risk, scanner, positions */}
             {isPaperMode && <AccountCards />}

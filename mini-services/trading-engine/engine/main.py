@@ -376,7 +376,7 @@ async def get_ai_status():
         "structure_analysis": ["BOS", "CHOCH", "Swing Points", "Liquidity Sweeps"],
         "mtf_timeframes": ["D1", "H1", "M15"],
         "symbols_focus": settings.DEFAULT_SYMBOLS,
-        "brokers": ["Paper Trading"],
+        "brokers": ["Paper Trading", "OctaFX", "Exness", "Headway"],
         "confidence_threshold": settings.ai_confidence_threshold,
         "high_confidence": settings.ai_high_confidence,
         "risk_per_trade": settings.risk_per_trade,

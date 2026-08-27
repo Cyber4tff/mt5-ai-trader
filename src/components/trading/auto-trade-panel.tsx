@@ -15,6 +15,33 @@ import { cn } from "@/lib/utils"
 export function AutoTradePanel() {
   const { autoTrade, toggleAutoTrade, scanMarkets, connection } = useTradingStore()
   const localInterval = autoTrade.intervalMinutes
+  const isLiveMode = connection.mode === "live"
+
+  // ── Auto-scan interval timer ─────────────────────────────
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  // Clear timer on unmount or when auto-trade is disabled
+  useEffect(() => {
+    if (autoTrade.enabled) {
+      // Clear any existing timer
+      if (timerRef.current) clearInterval(timerRef.current)
+      // Start a new recurring scan timer
+      timerRef.current = setInterval(() => {
+        scanMarkets()
+      }, localInterval * 60 * 1000)
+    } else {
+      if (timerRef.current) {
+        clearInterval(timerRef.current)
+        timerRef.current = null
+      }
+    }
+    return () => {
+      if (timerRef.current) {
+        clearInterval(timerRef.current)
+        timerRef.current = null
+      }
+    }
+  }, [autoTrade.enabled, localInterval, scanMarkets])
 
   const handleToggle = useCallback(
     async (checked: boolean) => {
@@ -76,7 +103,7 @@ export function AutoTradePanel() {
           <div className="flex items-center justify-between">
             <CardTitle className="flex items-center gap-2 text-sm font-medium text-zinc-300">
               <Bot className="size-4 text-zinc-400" />
-              Auto Trading
+              {isLiveMode ? "AI Signal Scanner" : "Auto Trading"}
             </CardTitle>
             {autoTrade.enabled ? (
               <motion.span
@@ -178,10 +205,16 @@ export function AutoTradePanel() {
 
           <Separator className="bg-zinc-800" />
 
-          {/* Warning */}
-          <p className="text-[10px] text-zinc-600 leading-relaxed">
-            ⚠ Auto-trading executes trades automatically based on AI decisions and risk checks. Use DEMO mode first.
-          </p>
+          {/* Mode-specific warning */}
+          {isLiveMode ? (
+            <p className="text-[10px] text-amber-400/80 leading-relaxed">
+              AI scans run automatically and show signals below. Trade them manually in your MT5 Web Terminal.
+            </p>
+          ) : (
+            <p className="text-[10px] text-zinc-600 leading-relaxed">
+              Auto-trading executes trades automatically based on AI decisions and risk checks. Use DEMO mode first.
+            </p>
+          )}
         </CardContent>
       </Card>
     </motion.div>

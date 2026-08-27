@@ -245,6 +245,8 @@ export interface ConnectionState {
   selectedBrokerId: string | null;
   mt5Server: string | null;
   webTerminalUrl: string | null;
+  // In live mode, this is the backend paper session ID used for AI analysis
+  analysisSessionId: string | null;
 }
 
 export interface AutoTradeState {
