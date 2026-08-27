@@ -40,7 +40,7 @@ export default function Home() {
       </main>
       <footer className="border-t border-zinc-800 bg-zinc-950 py-4 px-4 md:px-6 mt-auto">
         <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-2 text-xs text-zinc-500">
-          <span>MT5 AI Trader v2.0 — Naked Forex + Market Structure + Multi-Timeframe Analysis</span>
+          <span>Cloud AI Trader v2.0 — Real market data. Paper trading.</span>
           <span>Strict NO TRADE default. All risk checks must pass.</span>
         </div>
       </footer>

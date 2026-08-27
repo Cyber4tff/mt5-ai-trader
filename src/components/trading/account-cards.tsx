@@ -1,8 +1,8 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useEffect, useCallback, useRef } from "react";
 import { Wallet, TrendingUp, DollarSign, Shield } from "lucide-react";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { useTradingStore } from "@/lib/trading-store";
 import type { AccountInfo } from "@/lib/trading-types";
@@ -69,16 +69,6 @@ function ActiveCard({ def, account }: { def: MetricCard; account: AccountInfo })
   const value = def.getValue(account);
   const subtext = def.getSubtext(account);
   const colorClass = def.colorClass(account);
-  const [prevValue, setPrevValue] = useState(value);
-  const [animKey, setAnimKey] = useState(0);
-
-  useEffect(() => {
-    if (value !== prevValue) {
-      setPrevValue(value);
-      setAnimKey((k) => k + 1);
-    }
-  }, [value, prevValue]);
-
   return (
     <motion.div
       className="p-4 rounded-xl border border-zinc-800 bg-zinc-900/50 hover:border-zinc-700 transition-colors"
@@ -90,18 +80,16 @@ function ActiveCard({ def, account }: { def: MetricCard; account: AccountInfo })
         <Icon className="size-4 text-zinc-500" />
       </div>
       <div className="mt-2 flex items-baseline gap-2">
-        <AnimatePresence mode="wait">
-          <motion.span
-            key={animKey}
-            className={cn("text-2xl font-mono font-bold", colorClass)}
-            initial={{ y: 6, opacity: 0 }}
-            animate={{ y: 0, opacity: 1 }}
-            exit={{ y: -6, opacity: 0 }}
-            transition={{ duration: 0.15 }}
-          >
-            {value}
-          </motion.span>
-        </AnimatePresence>
+        <motion.span
+          key={value}
+          className={cn("text-2xl font-mono font-bold", colorClass)}
+          initial={{ y: 6, opacity: 0 }}
+          animate={{ y: 0, opacity: 1 }}
+          exit={{ y: -6, opacity: 0 }}
+          transition={{ duration: 0.15 }}
+        >
+          {value}
+        </motion.span>
         {subtext && (
           <span className={cn("text-xs font-mono", colorClass)}>{subtext}</span>
         )}

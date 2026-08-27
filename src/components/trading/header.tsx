@@ -1,7 +1,7 @@
 "use client";
 
 import { useTheme } from "next-themes";
-import { useState, useEffect } from "react";
+import { useSyncExternalStore } from "react";
 import { TrendingUp, Moon, Sun } from "lucide-react";
 import { motion } from "framer-motion";
 import { Badge } from "@/components/ui/badge";
@@ -12,11 +12,11 @@ import { useTradingStore } from "@/lib/trading-store";
 export function Header() {
   const { theme, setTheme } = useTheme();
   const { connection, aiStatus } = useTradingStore();
-  const [mounted, setMounted] = useState(false);
-
-  useEffect(() => {
-    setMounted(true);
-  }, []);
+  const mounted = useSyncExternalStore(
+    () => () => {},
+    () => true,
+    () => false
+  );
 
   const isConnected = connection.connected;
   const brokerName = connection.broker ?? "Not connected";
@@ -33,7 +33,7 @@ export function Header() {
       <div className="flex items-center gap-2">
         <TrendingUp className="size-5 text-emerald-500" />
         <span className="text-sm font-semibold tracking-tight">
-          MT5 AI Trader v2.0
+          Cloud AI Trader v2.0
         </span>
       </div>
 
@@ -72,7 +72,7 @@ export function Header() {
               : "bg-amber-500/20 text-amber-400 border-amber-500/30"
           )}
         >
-          {mode === "live" ? "Live" : "Demo"}
+          {mode === "live" ? "Live" : "Paper"}
         </Badge>
 
         {mounted && (

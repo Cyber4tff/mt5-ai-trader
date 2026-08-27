@@ -23,7 +23,7 @@ import { cn } from '@/lib/utils';
 import { useTradingStore } from '@/lib/trading-store';
 import type { ScanResult, TrendDirection, MarketBias } from '@/lib/trading-types';
 
-const TF_ORDER = ['D1', 'H4', 'H1', 'M15', 'M5'];
+const TF_ORDER = ['D1', 'H1', 'M15'];
 
 function TrendArrow({ trend }: { trend: TrendDirection }) {
   if (trend === 'UP') return <ArrowUp className="size-3.5 text-emerald-500" />;

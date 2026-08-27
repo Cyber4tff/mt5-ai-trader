@@ -8,7 +8,7 @@ import type {
   AIStatus,
   AutoTradeState,
 } from "./trading-types";
-import { tradingApi } from "./trading-api";
+import { tradingApi, type ConnectParams } from "./trading-api";
 
 // ─── Empty defaults (NO mock data) ───────────────────────────
 
@@ -47,7 +47,7 @@ const EMPTY_AI: AIStatus = {
   max_trades_per_day: 0,
   max_spread_points: 0,
   min_risk_reward: 0,
-  mode: "demo",
+  mode: "paper",
   trailing_stop: false,
 };
 
@@ -56,6 +56,7 @@ const EMPTY_AI: AIStatus = {
 interface TradingStore {
   // State
   backendAvailable: boolean;
+  backendChecking: boolean;
   connection: ConnectionState;
   positions: Position[];
   pendingOrders: Position[];
@@ -68,6 +69,7 @@ interface TradingStore {
   fetchingAccount: boolean;
 
   // Actions
+  startPaperTrading: (balance?: number, leverage?: number) => Promise<boolean>;
   connect: (broker: string, login: number, password: string, server?: string) => Promise<boolean>;
   disconnect: () => Promise<void>;
   fetchAccount: () => Promise<void>;
@@ -76,6 +78,7 @@ interface TradingStore {
   scanMarkets: (symbols?: string[]) => Promise<void>;
   toggleAutoTrade: (enabled: boolean, interval?: number) => Promise<void>;
   closePosition: (ticket: number) => Promise<void>;
+  checkBackendHealth: () => Promise<boolean>;
 }
 
 function log(state: TradingStore, msg: string): string[] {
@@ -103,6 +106,7 @@ function parsePosition(p: Record<string, unknown>): Position {
 export const useTradingStore = create<TradingStore>((set, get) => ({
   // ── Initial State ───────────────────────────────────────────
   backendAvailable: false,
+  backendChecking: false,
   connection: {
     connected: false,
     sessionId: null,
@@ -119,23 +123,101 @@ export const useTradingStore = create<TradingStore>((set, get) => ({
   autoTrade: {
     enabled: false,
     intervalMinutes: 15,
-    symbols: ["BTCUSD", "XAUUSD"],
+    symbols: ["EURUSD", "XAUUSD", "BTCUSD", "GBPUSD"],
     lastScan: null,
     cycleCount: 0,
   },
   scanning: false,
-  scanLog: ["System initialized. Start the Python trading engine, then connect."],
+  scanLog: ["System ready. Click 'Start Paper Trading' to begin."],
   fetchingAccount: false,
 
-  // ── Connect ──────────────────────────────────────────────
+  // ── Check Backend Health ────────────────────────────────
+  checkBackendHealth: async () => {
+    set({ backendChecking: true });
+    try {
+      await tradingApi.getHealth();
+      set({ backendAvailable: true, backendChecking: false });
+      return true;
+    } catch {
+      set({ backendAvailable: false, backendChecking: false });
+      return false;
+    }
+  },
+
+  // ── Start Paper Trading ────────────────────────────────
+  startPaperTrading: async (balance = 10000, leverage = 100) => {
+    const state = get();
+    set((s) => ({ scanLog: log(s, `Starting paper trading... Balance: $${balance.toLocaleString()} | Leverage: 1:${leverage}`) }));
+
+    try {
+      const res = await tradingApi.connect({
+        broker: "paper",
+        account_type: "paper",
+        balance,
+        leverage,
+      });
+
+      if (!res.success) {
+        set((s) => ({ scanLog: log(s, `Failed to start: ${JSON.stringify(res)}`) }));
+        return false;
+      }
+
+      const account: AccountInfo = {
+        balance: res.account.balance,
+        equity: res.account.equity,
+        margin: res.account.margin || 0,
+        free_margin: res.account.free_margin,
+        leverage: res.account.leverage,
+        profit: 0,
+        margin_level: res.account.margin_level,
+      };
+
+      const conn: ConnectionState = {
+        connected: true,
+        sessionId: res.session_id,
+        broker: res.broker,
+        server: res.server,
+        account,
+        lastUpdate: new Date().toISOString(),
+      };
+
+      set({
+        connection: conn,
+        backendAvailable: true,
+        positions: [],
+        scanResults: [],
+        riskSummary: EMPTY_RISK,
+        scanLog: log(
+          { ...get(), connection: conn },
+          `Paper trading started. Balance: $${account.balance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} | Mode: PAPER`
+        ),
+      });
+
+      // Fetch real data immediately
+      get().fetchAccount();
+      get().fetchRiskStatus();
+      get().fetchAIStatus();
+
+      return true;
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : "Unknown error";
+      set((s) => ({
+        backendAvailable: false,
+        scanLog: log(s, `Start failed: ${msg}`),
+      }));
+      return false;
+    }
+  },
+
+  // ── Connect (legacy MT5 - now also creates paper session) ─
   connect: async (broker, login, password, server) => {
     const state = get();
-    set((s) => ({ scanLog: log(s, `Connecting to ${broker} (login: ${login})...`) }));
+    set((s) => ({ scanLog: log(s, `Connecting to ${broker}...`) }));
 
     try {
       const res = await tradingApi.connect({
         broker: broker.toLowerCase(),
-        account_type: "demo", // always use demo account type label; the server handles real/demo based on broker config
+        account_type: "paper",
         login,
         password,
         server: server || undefined,
@@ -173,11 +255,10 @@ export const useTradingStore = create<TradingStore>((set, get) => ({
         riskSummary: EMPTY_RISK,
         scanLog: log(
           { ...get(), connection: conn },
-          `Connected to ${res.broker} (${res.server}). Balance: $${account.balance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} | Mode: ${res.mode?.toUpperCase() || "DEMO"}`
+          `Connected to ${res.broker} (${res.server}). Balance: $${account.balance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} | Mode: ${res.mode?.toUpperCase() || "PAPER"}`
         ),
       });
 
-      // Fetch real data immediately
       get().fetchAccount();
       get().fetchRiskStatus();
       get().fetchAIStatus();
@@ -216,12 +297,12 @@ export const useTradingStore = create<TradingStore>((set, get) => ({
       pendingOrders: [],
       scanResults: [],
       riskSummary: EMPTY_RISK,
-      autoTrade: { enabled: false, intervalMinutes: 15, symbols: ["BTCUSD", "XAUUSD"], lastScan: null, cycleCount: 0 },
-      scanLog: log(state, "Disconnected from broker."),
+      autoTrade: { enabled: false, intervalMinutes: 15, symbols: ["EURUSD", "XAUUSD", "BTCUSD", "GBPUSD"], lastScan: null, cycleCount: 0 },
+      scanLog: log(state, "Disconnected."),
     });
   },
 
-  // ── Fetch Account (real data from MT5) ────────────────────
+  // ── Fetch Account (real data from trading engine) ────────
   fetchAccount: async () => {
     const state = get();
     if (!state.connection.sessionId) return;
@@ -239,7 +320,6 @@ export const useTradingStore = create<TradingStore>((set, get) => ({
         margin_level: data.margin_level as number,
       };
 
-      // Parse positions from account response
       const rawPositions = (data.positions as Record<string, unknown>[]) || [];
       const rawOrders = (data.orders as Record<string, unknown>[]) || [];
 
@@ -255,7 +335,6 @@ export const useTradingStore = create<TradingStore>((set, get) => ({
       });
     } catch (error) {
       const msg = error instanceof Error ? error.message : "Unknown error";
-      // Don't spam the log on every poll failure
       if (!msg.includes("502") && !msg.includes("fetch")) {
         set((s) => ({ scanLog: log(s, `Account fetch error: ${msg}`) }));
       }
@@ -306,7 +385,7 @@ export const useTradingStore = create<TradingStore>((set, get) => ({
           max_trades_per_day: (data.max_trades_per_day as number) || 0,
           max_spread_points: (data.max_spread_points as number) || 0,
           min_risk_reward: (data.min_risk_reward as number) || 0,
-          mode: (data.mode as "demo" | "live") || "demo",
+          mode: ((data.mode as string) || "paper") as "demo" | "live",
           trailing_stop: (data.trailing_stop as boolean) || false,
         },
       });
@@ -327,7 +406,6 @@ export const useTradingStore = create<TradingStore>((set, get) => ({
       const data = await tradingApi.scan(state.connection.sessionId, { symbols });
       const rawResults = (data.results as Record<string, unknown>[]) || [];
 
-      // Map raw results to our type
       const results: ScanResult[] = rawResults.map((r) => {
         const actionable = r.actionable_signal
           ? {
@@ -380,7 +458,6 @@ export const useTradingStore = create<TradingStore>((set, get) => ({
         ],
       }));
 
-      // After scan, refresh risk status (trade counts may have changed)
       get().fetchRiskStatus();
     } catch (error) {
       const msg = error instanceof Error ? error.message : "Unknown error";
@@ -429,7 +506,6 @@ export const useTradingStore = create<TradingStore>((set, get) => ({
           `Closed #${ticket} (${pos?.symbol} ${pos?.type}) P&L: $${pos?.profit?.toFixed(2) || "0.00"}`
         ),
       }));
-      // Refresh account and risk after close
       get().fetchAccount();
       get().fetchRiskStatus();
     } catch (error) {

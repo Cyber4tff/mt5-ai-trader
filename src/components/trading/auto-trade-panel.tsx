@@ -14,13 +14,7 @@ import { cn } from "@/lib/utils"
 
 export function AutoTradePanel() {
   const { autoTrade, toggleAutoTrade, scanMarkets, connection } = useTradingStore()
-  const [localInterval, setLocalInterval] = useState(autoTrade.intervalMinutes)
-  const prevEnabledRef = useRef(autoTrade.enabled)
-
-  // Sync local interval when store changes externally
-  useEffect(() => {
-    setLocalInterval(autoTrade.intervalMinutes)
-  }, [autoTrade.intervalMinutes])
+  const localInterval = autoTrade.intervalMinutes
 
   const handleToggle = useCallback(
     async (checked: boolean) => {
@@ -33,6 +27,8 @@ export function AutoTradePanel() {
     },
     [connection.connected, toggleAutoTrade, localInterval]
   )
+
+  const prevEnabledRef = useRef(autoTrade.enabled)
 
   // Trigger scan 1s after enabling
   useEffect(() => {
@@ -48,7 +44,6 @@ export function AutoTradePanel() {
   const handleSliderChange = useCallback(
     (value: number[]) => {
       const v = value[0]
-      setLocalInterval(v)
       if (autoTrade.enabled) {
         toggleAutoTrade(true, v)
       }

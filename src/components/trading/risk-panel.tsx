@@ -48,6 +48,7 @@ function MetricCard({
   progress,
   progressColor,
   icon: Icon,
+  placeholder = false,
 }: {
   label: string;
   value: string;
@@ -56,21 +57,27 @@ function MetricCard({
   progress?: number;
   progressColor?: string;
   icon?: React.ComponentType<{ className?: string }>;
+  placeholder?: boolean;
 }) {
   return (
     <motion.div
       initial={{ opacity: 0, y: 12 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.3 }}
-      className="flex flex-col gap-2 rounded-lg bg-zinc-900/80 p-3 border border-zinc-800/50"
+      className={cn(
+        "flex flex-col gap-2 rounded-lg p-3 border",
+        placeholder
+          ? "border-dashed border-zinc-700 bg-zinc-900/30"
+          : "border-zinc-800/50 bg-zinc-900/80"
+      )}
     >
       <div className="flex items-center justify-between">
-        <span className="text-xs uppercase text-muted-foreground tracking-wider">{label}</span>
-        {Icon && <Icon className="size-3.5 text-muted-foreground" />}
+        <span className={cn("text-xs uppercase tracking-wider", placeholder ? "text-zinc-600" : "text-muted-foreground")}>{label}</span>
+        {Icon && <Icon className={cn("size-3.5", placeholder ? "text-zinc-600" : "text-muted-foreground")} />}
       </div>
-      <AnimatedValue value={value} className={valueColor} />
-      {sub && <span className="text-xs text-muted-foreground">{sub}</span>}
-      {progress !== undefined && progressColor && (
+      <AnimatedValue value={value} className={placeholder ? "text-zinc-600" : (valueColor || '')} />
+      {sub && <span className={cn("text-xs", placeholder ? "text-zinc-600" : "text-muted-foreground")}>{sub}</span>}
+      {progress !== undefined && progressColor && !placeholder && (
         <div className="mt-1">
           <ThinProgress value={progress} color={progressColor} />
         </div>
@@ -83,19 +90,19 @@ export function RiskPanel() {
   const riskSummary = useTradingStore((s) => s.riskSummary);
   const aiStatus = useTradingStore((s) => s.aiStatus);
   const connection = useTradingStore((s) => s.connection);
+  const isConnected = connection.connected;
 
   const balance = connection.account?.balance ?? 0;
-  const maxDailyLoss = balance * aiStatus.max_daily_loss_pct;
-  const maxTrades = aiStatus.max_trades_per_day;
-  const maxConsecutiveLosses = aiStatus.max_consecutive_losses;
+  const maxDailyLoss = balance * (aiStatus.max_daily_loss_pct || 0.06);
+  const maxTrades = aiStatus.max_trades_per_day || 10;
+  const maxConsecutiveLosses = aiStatus.max_consecutive_losses || 3;
 
   // Daily P&L calculations
   const pnl = riskSummary.realized_pnl;
   const pnlColor = pnl >= 0 ? 'text-emerald-500' : 'text-red-500';
   const pnlSign = pnl >= 0 ? '+' : '';
   const pnlValue = `${pnlSign}$${Math.abs(pnl).toFixed(2)}`;
-  // Progress: how much of the loss limit has been used (0 if in profit)
-  const lossUsage = pnl < 0 ? (Math.abs(pnl) / maxDailyLoss) * 100 : 0;
+  const lossUsage = maxDailyLoss > 0 && pnl < 0 ? (Math.abs(pnl) / maxDailyLoss) * 100 : 0;
   const pnlProgressColor =
     pnl >= 0
       ? '#10b981'
@@ -107,7 +114,7 @@ export function RiskPanel() {
 
   // Trades today
   const tradesUsed = riskSummary.trades_count;
-  const tradesProgress = (tradesUsed / maxTrades) * 100;
+  const tradesProgress = maxTrades > 0 ? (tradesUsed / maxTrades) * 100 : 0;
   const tradesProgressColor =
     tradesUsed >= maxTrades
       ? '#ef4444'
@@ -117,7 +124,7 @@ export function RiskPanel() {
 
   // Consecutive losses
   const consLosses = riskSummary.consecutive_losses;
-  const consLossProgress = (consLosses / maxConsecutiveLosses) * 100;
+  const consLossProgress = maxConsecutiveLosses > 0 ? (consLosses / maxConsecutiveLosses) * 100 : 0;
   const consLossColor =
     consLosses >= maxConsecutiveLosses
       ? 'text-red-500'
@@ -127,8 +134,9 @@ export function RiskPanel() {
   const consLossProgressColor =
     consLosses >= maxConsecutiveLosses ? '#ef4444' : '#f59e0b';
 
-  // Remaining loss limit
-  const remainingPct = riskSummary.remaining_loss_limit * 100;
+  // Remaining loss limit (dollar amount to percentage of balance)
+  const remainingLossLimit = riskSummary.remaining_loss_limit;
+  const remainingPct = balance > 0 ? (remainingLossLimit / balance) * 100 : 100;
   const remainingColor =
     remainingPct > 50
       ? 'text-emerald-500'
@@ -154,49 +162,57 @@ export function RiskPanel() {
       <CardContent className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <MetricCard
           label="Daily P&L"
-          value={pnlValue}
-          valueColor={pnlColor}
-          sub={`$${Math.abs(pnl).toFixed(2)} / $${maxDailyLoss.toFixed(2)} limit`}
-          progress={lossUsage}
+          value={isConnected ? pnlValue : "$0.00"}
+          valueColor={isConnected ? pnlColor : 'text-zinc-600'}
+          sub={isConnected ? `$${Math.abs(pnl).toFixed(2)} / $${maxDailyLoss.toFixed(2)} limit` : undefined}
+          progress={isConnected ? lossUsage : undefined}
           progressColor={pnlProgressColor}
-          icon={pnl >= 0 ? TrendingUp : TrendingDown}
+          icon={isConnected ? (pnl >= 0 ? TrendingUp : TrendingDown) : undefined}
+          placeholder={!isConnected}
         />
 
         <MetricCard
           label="Trades Today"
-          value={`${tradesUsed} / ${maxTrades}`}
-          sub={`${riskSummary.remaining_trades} remaining`}
-          progress={tradesProgress}
+          value={isConnected ? `${tradesUsed} / ${maxTrades}` : `0 / ${maxTrades || 10}`}
+          sub={isConnected ? `${riskSummary.remaining_trades} remaining` : undefined}
+          progress={isConnected ? tradesProgress : undefined}
           progressColor={tradesProgressColor}
+          placeholder={!isConnected}
         />
 
         <MetricCard
           label="Consecutive Losses"
-          value={`${consLosses} / ${maxConsecutiveLosses}`}
-          valueColor={consLossColor}
+          value={isConnected ? `${consLosses} / ${maxConsecutiveLosses}` : `0 / ${maxConsecutiveLosses || 3}`}
+          valueColor={isConnected ? consLossColor : 'text-zinc-600'}
           sub={
-            consLosses >= maxConsecutiveLosses
-              ? 'LIMIT REACHED'
-              : `${maxConsecutiveLosses - consLosses} remaining`
+            isConnected
+              ? (consLosses >= maxConsecutiveLosses
+                  ? 'LIMIT REACHED'
+                  : `${maxConsecutiveLosses - consLosses} remaining`)
+              : undefined
           }
-          progress={consLossProgress}
+          progress={isConnected ? consLossProgress : undefined}
           progressColor={consLossProgressColor}
-          icon={consLosses >= maxConsecutiveLosses ? AlertTriangle : undefined}
+          icon={isConnected && consLosses >= maxConsecutiveLosses ? AlertTriangle : undefined}
+          placeholder={!isConnected}
         />
 
         <MetricCard
           label="Remaining Loss Limit"
-          value={`${remainingPct.toFixed(1)}%`}
-          valueColor={remainingColor}
+          value={isConnected ? `$${remainingLossLimit.toFixed(2)}` : "$--"}
+          valueColor={isConnected ? remainingColor : 'text-zinc-600'}
           sub={
-            remainingPct < 20
-              ? 'CRITICAL'
-              : remainingPct < 50
-                ? 'CAUTION'
-                : 'HEALTHY'
+            isConnected
+              ? (remainingPct < 20
+                  ? 'CRITICAL'
+                  : remainingPct < 50
+                    ? 'CAUTION'
+                    : 'HEALTHY')
+              : undefined
           }
-          progress={remainingPct}
+          progress={isConnected ? remainingPct : undefined}
           progressColor={remainingProgressColor}
+          placeholder={!isConnected}
         />
       </CardContent>
 
@@ -208,7 +224,7 @@ export function RiskPanel() {
           NO TRADE DEFAULT
         </Badge>
         <p className="text-xs text-muted-foreground text-center">
-          A trade only executes when ALL risk checks pass.
+          A trade only executes when ALL 9 risk checks pass.
         </p>
       </CardFooter>
     </Card>
