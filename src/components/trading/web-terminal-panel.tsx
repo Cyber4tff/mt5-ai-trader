@@ -18,11 +18,15 @@ export function WebTerminalPanel() {
   const isLiveMode = connection.connected && connection.mode === "live";
   const mt5Server = connection.mt5Server;
 
-  // Build the MT5 Web Terminal URL — always force platform=mt5
+  // Build the MT5 Web Terminal URL — startup_version=5 forces MT5 (default is MT4!)
   const terminalUrl = useMemo(() => {
-    const base = "https://trade.mql5.com/trade?platform=mt5";
-    if (!mt5Server) return base;
-    return `${base}&server=${encodeURIComponent(mt5Server)}`;
+    const params = new URLSearchParams({
+      startup_version: "5",
+    });
+    if (mt5Server) {
+      params.set("server", mt5Server);
+    }
+    return `https://trade.mql5.com/trade?${params.toString()}`;
   }, [mt5Server]);
 
   const handleRefresh = useCallback(() => {

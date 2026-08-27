@@ -52,3 +52,24 @@ Stage Summary:
 - All mock data fully removed - live mode shows zero fake data
 - Paper trading mode still available with AI analysis engine
 - Zero console errors, clean lint, browser-verified end-to-end
+
+---
+Task ID: 3
+Agent: Main
+Task: Fix MT5 Web Terminal showing MT4 instead of MT5
+
+Work Log:
+- User reported login form always shows MetaTrader 4 platform selected
+- First attempted `platform=mt5` URL parameter — did not work
+- Researched MetaQuotes official documentation (mql5.com/en/articles/3024)
+- Discovered the correct parameter: `startup_version` — default is 4 (MT4), must set to 5 for MT5
+- Fixed web-terminal-panel.tsx: URL now uses `startup_version=5&server=Headway-Demo`
+- Also fixed Headway server names to match real servers from user's screenshot: `Headway-Demo`, `Headway-Real`, `Headway-Live`
+- Updated OctaFX server names to include `MT5` prefix: `OctaFX-MT5-Real`, etc.
+- Browser-verified: URL is now `https://trade.mql5.com/trade?startup_version=5&server=Headway-Demo`
+
+Stage Summary:
+- Root cause: MetaQuotes web terminal defaults to `startup_version=4` (MT4) if not specified
+- Fix: Added `startup_version=5` to the iframe URL query parameters
+- Headway servers corrected to: Headway-Demo, Headway-Real, Headway-Live
+- User's Headway demo account confirmed: Login 5639816, Server Headway-Demo
