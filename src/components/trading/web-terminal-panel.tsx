@@ -1,31 +1,32 @@
 "use client";
 
-import { useMemo } from "react";
-import { Maximize2, Minimize2, RefreshCw, ExternalLink, Monitor } from "lucide-react";
+import { useMemo, useState, useRef, useCallback } from "react";
+import { Maximize2, Minimize2, RefreshCw, ExternalLink, Monitor, AlertTriangle } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useTradingStore } from "@/lib/trading-store";
-import { useState, useRef, useCallback } from "react";
 
 export function WebTerminalPanel() {
   const connection = useTradingStore((s) => s.connection);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [iframeKey, setIframeKey] = useState(0);
+  const [loadFailed, setLoadFailed] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
 
   const isLiveMode = connection.connected && connection.mode === "live";
   const mt5Server = connection.mt5Server;
 
-  // Build the MT5 Web Terminal URL
+  // Build the MT5 Web Terminal URL — always force platform=mt5
   const terminalUrl = useMemo(() => {
-    if (!mt5Server) return "https://trade.mql5.com/trade";
-    // Pre-select the server in the web terminal
-    return `https://trade.mql5.com/trade?server=${encodeURIComponent(mt5Server)}`;
+    const base = "https://trade.mql5.com/trade?platform=mt5";
+    if (!mt5Server) return base;
+    return `${base}&server=${encodeURIComponent(mt5Server)}`;
   }, [mt5Server]);
 
   const handleRefresh = useCallback(() => {
+    setLoadFailed(false);
     setIframeKey((k) => k + 1);
   }, []);
 
@@ -59,7 +60,7 @@ export function WebTerminalPanel() {
           <CardHeader className="px-4 md:px-6 py-3 flex-row items-center justify-between flex-shrink-0">
             <CardTitle className="flex items-center gap-2 text-white text-sm">
               <Monitor className="size-4 text-emerald-500" />
-              MT5 Web Terminal
+              MetaTrader 5 Web Terminal
               <Badge className="bg-red-500/20 text-red-400 border-red-500/30 text-[10px] font-bold ml-2">
                 LIVE
               </Badge>
@@ -78,13 +79,14 @@ export function WebTerminalPanel() {
                 <RefreshCw className="size-3.5" />
               </Button>
               <Button
-                variant="ghost"
-                size="icon"
-                className="h-8 w-8 text-zinc-400 hover:text-white hover:bg-zinc-800"
+                size="sm"
+                variant="outline"
+                className="h-8 text-xs text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/10"
                 onClick={handleOpenExternal}
-                title="Open in new tab"
+                title="Open in new browser tab"
               >
-                <ExternalLink className="size-3.5" />
+                <ExternalLink className="size-3 mr-1" />
+                Open in Tab
               </Button>
               <Button
                 variant="ghost"
@@ -99,14 +101,40 @@ export function WebTerminalPanel() {
           </CardHeader>
 
           <CardContent className="flex-1 p-0 relative overflow-hidden">
+            {/* Fallback if iframe can't load (e.g. embedded preview) */}
+            {loadFailed && (
+              <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-zinc-900/95 gap-4">
+                <AlertTriangle className="size-10 text-amber-400" />
+                <div className="text-center max-w-sm">
+                  <h3 className="text-white font-semibold text-sm mb-1">
+                    Terminal can't load here
+                  </h3>
+                  <p className="text-xs text-zinc-400 leading-relaxed">
+                    The MT5 Web Terminal needs to open in a full browser window.
+                    Click below to open it in a new tab with your broker pre-selected.
+                  </p>
+                </div>
+                <Button
+                  onClick={handleOpenExternal}
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold px-6"
+                >
+                  <ExternalLink className="size-4 mr-2" />
+                  Open MT5 Terminal
+                </Button>
+                <p className="text-[10px] text-zinc-500">
+                  Server: <span className="text-zinc-300 font-mono">{mt5Server}</span>
+                </p>
+              </div>
+            )}
+
             <iframe
               key={iframeKey}
               src={terminalUrl}
               className="w-full h-full border-0"
               style={{ minHeight: "600px" }}
               allow="clipboard-read; clipboard-write"
-              title="MT5 Web Terminal — Live Trading"
-              sandbox="allow-same-origin allow-scripts allow-popups allow-forms allow-modals allow-popups-to-escape-sandbox"
+              title="MetaTrader 5 Web Terminal — Live Trading"
+              sandbox="allow-same-origin allow-scripts allow-popups allow-forms allow-modals allow-popups-to-escape-sandbox allow-top-navigation"
             />
           </CardContent>
         </Card>
