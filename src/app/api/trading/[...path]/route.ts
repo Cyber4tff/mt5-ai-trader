@@ -18,7 +18,7 @@ export async function GET(
 
 async function proxyRequest(
   request: NextRequest,
-  paramsPromise: Promise<{ path: string[] }>},
+  paramsPromise: Promise<{ path: string[] }>,
   method: string
 ) {
   const { path } = await paramsPromise;
@@ -29,7 +29,7 @@ async function proxyRequest(
   searchParams.set("XTransformPort", PYTHON_BACKEND_PORT);
 
   const targetPath = `/api/trading/${pathStr}`;
-  const targetUrl = `${targetPath}?${searchParams.toString()}`;
+  const targetUrl = `http://localhost:${PYTHON_BACKEND_PORT}${targetPath}`;
 
   try {
     const headers = new Headers(request.headers);
@@ -58,3 +58,4 @@ async function proxyRequest(
     );
   }
 }
+
