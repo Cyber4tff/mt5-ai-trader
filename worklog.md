@@ -88,3 +88,22 @@ Stage Summary:
 - MT5 positions panel shows live trades with close capability
 - Backend gracefully handles Linux (no MT5 lib) with clear error messages
 - On Windows with MT5 desktop installed, trades would execute on the real account
+---
+Task ID: 4
+Agent: Main Agent
+Task: Prepare project for Windows deployment - create deployment package
+
+Work Log:
+- Created mini-services/trading-engine/requirements.txt with all Python dependencies (fastapi, uvicorn, pydantic, numpy, pandas, yfinance, MetaTrader5)
+- Rewrote src/app/api/trading/[...path]/route.ts: removed hardcoded Linux paths, removed auto-spawn of Python engine, now a clean proxy that forwards to localhost:8001
+- Created start-backend.bat: Windows batch script that checks Python, installs requirements, starts uvicorn on port 8001
+- Created start-frontend.bat: Windows batch script that checks Node.js, runs npm install if needed, generates Prisma client, starts Next.js on port 3000
+- Created start.bat: Master launcher that opens both backend and frontend in separate windows with 5s delay between them
+- Created DEPLOYMENT.md: Comprehensive step-by-step Windows deployment guide
+- Ran bun run lint - passed clean
+
+Stage Summary:
+- Project is now ready for Windows deployment with zero code changes needed
+- User just needs to download the project folder, install Python + Node.js, and double-click start.bat
+- API proxy simplified to a clean reverse proxy (no more auto-spawn with hardcoded paths)
+- All startup scripts include dependency checking and installation

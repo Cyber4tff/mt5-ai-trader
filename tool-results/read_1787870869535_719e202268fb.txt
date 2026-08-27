@@ -1,0 +1,911 @@
+     1→from __future__ import annotations
+     2→
+     3→import asyncio
+     4→import time
+     5→import traceback
+     6→from typing import Dict, List, Optional
+     7→
+     8→import numpy as np
+     9→import pandas as pd
+    10→from fastapi import FastAPI, HTTPException
+    11→from fastapi.middleware.cors import CORSMiddleware
+    12→from pydantic import BaseModel
+    13→
+    14→from engine.analysis import (
+    15→    AIDecisionEngine,
+    16→    MarketStructureAnalyzer,
+    17→    MultiTimeframeAnalyzer,
+    18→    NakedForexStrategy,
+    19→    SupportResistanceDetector,
+    20→    calculate_atr_value,
+    21→)
+    22→from engine.data_fetcher import (
+    23→    fetch_candles,
+    24→    fetch_current_price,
+    25→    get_available_symbols,
+    26→    invalidate_cache,
+    27→)
+    28→from engine.models import (
+    29→    MarketAnalysis,
+    30→    MarketBias,
+    31→    PatternName,
+    32→    SignalType,
+    33→    TradingSession,
+    34→)
+    35→from engine.paper_trading import PaperTradingEngine
+    36→from engine.settings import settings
+    37→
+    38→# Try to import MetaTrader5 (Windows only, requires MT5 desktop app)
+    39→MT5_AVAILABLE = False
+    40→try:
+    41→    import MetaTrader5 as mt5
+    42→    MT5_AVAILABLE = True
+    43→    print("[Engine] MetaTrader5 library loaded successfully")
+    44→except ImportError:
+    45→    print("[Engine] MetaTrader5 library not available - MT5 direct connect disabled")
+    46→
+    47→# ====================================================================
+    48→# FastAPI App
+    49→# ====================================================================
+    50→
+    51→app = FastAPI(title="Cloud Trading Engine", version="2.0.0")
+    52→
+    53→app.add_middleware(
+    54→    CORSMiddleware,
+    55→    allow_origins=["*"],
+    56→    allow_credentials=True,
+    57→    allow_methods=["*"],
+    58→    allow_headers=["*"],
+    59→)
+    60→
+    61→# Globals
+    62→trading_engine = PaperTradingEngine()
+    63→multi_tf = MultiTimeframeAnalyzer()
+    64→ai_engine = AIDecisionEngine()
+    65→
+    66→# Background price updater task
+    67→_price_update_task: Optional[asyncio.Task] = None
+    68→
+    69→
+    70→# ====================================================================
+    71→# Request / Response Models
+    72→# ====================================================================
+    73→
+    74→
+    75→class ConnectRequest(BaseModel):
+    76→    broker: str = "paper"
+    77→    account_type: str = "paper"
+    78→    login: int = 0
+    79→    password: str = ""
+    80→    server: Optional[str] = None
+    81→    balance: float = 10000.0
+    82→    leverage: int = 100
+    83→
+    84→
+    85→class ScanRequest(BaseModel):
+    86→    symbols: Optional[List[str]] = None
+    87→    entry_timeframe: Optional[str] = None
+    88→
+    89→
+    90→class AutoTradeRequest(BaseModel):
+    91→    enabled: bool
+    92→    interval_minutes: int = 15
+    93→
+    94→
+    95→class MT5ConnectRequest(BaseModel):
+    96→    login: int
+    97→    password: str
+    98→    server: str
+    99→
+   100→
+   101→# ====================================================================
+   102→# Connection Endpoints
+   103→# ====================================================================
+   104→
+   105→
+   106→@app.post("/api/trading/connect")
+   107→async def connect(req: ConnectRequest):
+   108→    """Create a paper trading session."""
+   109→    try:
+   110→        broker_name = "Paper Trading"
+   111→        if req.broker and req.broker.lower() != "paper":
+   112→            # Map known broker names
+   113→            broker_map = {"exness": "Exness", "octafx": "OctaFX", "headway": "Headway"}
+   114→            broker_name = broker_map.get(req.broker.lower(), req.broker.title())
+   115→
+   116→        session = trading_engine.create_session(
+   117→            broker=broker_name,
+   118→            account_type=req.account_type or "paper",
+   119→            login=req.login,
+   120→            password=req.password,
+   121→            balance=req.balance,
+   122→            leverage=req.leverage,
+   123→        )
+   124→
+   125→        account = session.get_account()
+   126→
+   127→        # Pre-fetch prices for default symbols
+   128→        for sym in settings.DEFAULT_SYMBOLS:
+   129→            price = fetch_current_price(sym)
+   130→            if price:
+   131→                session.price_cache[sym] = price
+   132→
+   133→        return {
+   134→            "success": True,
+   135→            "session_id": session.session_id,
+   136→            "broker": session.broker,
+   137→            "server": session.server,
+   138→            "mode": "PAPER",
+   139→            "account": account.to_dict(),
+   140→        }
+   141→    except Exception as e:
+   142→        traceback.print_exc()
+   143→        raise HTTPException(status_code=500, detail=str(e))
+   144→
+   145→
+   146→@app.post("/api/trading/disconnect/{session_id}")
+   147→async def disconnect(session_id: str):
+   148→    trading_engine.remove_session(session_id)
+   149→    _disconnect_mt5()
+   150→    return {"success": True}
+   151→
+   152→
+   153→# ── MT5 Direct Connection ─────────────────────────────────────────
+   154→
+   155→_mt5_connected = False
+   156→_mt5_account_info = None
+   157→
+   158→
+   159→def _connect_mt5(login: int, password: str, server: str) -> dict:
+   160→    """Connect to MT5 terminal and return account info."""
+   161→    global _mt5_connected, _mt5_account_info
+   162→
+   163→    if not MT5_AVAILABLE:
+   164→        return {
+   165→            "success": False,
+   166→            "error": "MT5 library not available on this server. MetaTrader5 requires Windows with the MT5 desktop application installed.",
+   167→            "mt5_available": False,
+   168→        }
+   169→
+   170→    try:
+   171→        if not mt5.initialize():
+   172→            return {"success": False, "error": f"MT5 initialize failed: {mt5.last_error()}", "mt5_available": True}
+   173→
+   174→        authorized = mt5.login(login, password, server)
+   175→        if not authorized:
+   176→            error_code = mt5.last_error()
+   177→            mt5.shutdown()
+   178→            error_messages = {
+   179→                1: "No connection with trade server",
+   180→                2: "Invalid authorization",
+   181→                3: "Invalid password",
+   182→                10: "No connection with trade server",
+   183→            }
+   184→            msg = error_messages.get(error_code, f"Login failed (error {error_code})")
+   185→            return {"success": False, "error": msg, "mt5_available": True, "error_code": error_code}
+   186→
+   187→        _mt5_connected = True
+   188→        account = mt5.account_info()
+   189→        _mt5_account_info = account
+   190→
+   191→        return {
+   192→            "success": True,
+   193→            "mt5_available": True,
+   194→            "account": {
+   195→                "balance": account.balance,
+   196→                "equity": account.equity,
+   197→                "margin": account.margin,
+   198→                "free_margin": account.margin_free,
+   199→                "leverage": account.leverage,
+   200→                "profit": account.profit,
+   201→                "margin_level": account.margin_level if account.margin > 0 else 0,
+   202→                "login": account.login,
+   203→                "name": account.name,
+   204→                "server": account.server,
+   205→                "currency": account.currency,
+   206→            },
+   207→        }
+   208→    except Exception as e:
+   209→        _mt5_connected = False
+   210→        return {"success": False, "error": str(e), "mt5_available": True}
+   211→
+   212→
+   213→def _disconnect_mt5():
+   214→    """Disconnect from MT5."""
+   215→    global _mt5_connected, _mt5_account_info
+   216→    if MT5_AVAILABLE and _mt5_connected:
+   217→        try:
+   218→            mt5.shutdown()
+   219→        except Exception:
+   220→            pass
+   221→    _mt5_connected = False
+   222→    _mt5_account_info = None
+   223→
+   224→
+   225→def _get_mt5_account() -> dict:
+   226→    """Get current MT5 account info."""
+   227→    global _mt5_account_info
+   228→    if not MT5_AVAILABLE or not _mt5_connected:
+   229→        return {"success": False, "error": "Not connected to MT5"}
+   230→
+   231→    try:
+   232→        account = mt5.account_info()
+   233→        if account is None:
+   234→            return {"success": False, "error": "Failed to get account info"}
+   235→        _mt5_account_info = account
+   236→
+   237→        return {
+   238→            "success": True,
+   239→            "account": {
+   240→                "balance": account.balance,
+   241→                "equity": account.equity,
+   242→                "margin": account.margin,
+   243→                "free_margin": account.margin_free,
+   244→                "leverage": account.leverage,
+   245→                "profit": account.profit,
+   246→                "margin_level": account.margin_level if account.margin > 0 else 0,
+   247→                "login": account.login,
+   248→                "name": account.name,
+   249→                "server": account.server,
+   250→                "currency": account.currency,
+   251→            },
+   252→        }
+   253→    except Exception as e:
+   254→        return {"success": False, "error": str(e)}
+   255→
+   256→
+   257→def _get_mt5_positions() -> dict:
+   258→    """Get current MT5 positions."""
+   259→    if not MT5_AVAILABLE or not _mt5_connected:
+   260→        return {"success": False, "error": "Not connected to MT5"}
+   261→
+   262→    try:
+   263→        positions = mt5.positions_get()
+   264→        if positions is None:
+   265→            return {"success": True, "positions": [], "orders": []}
+   266→
+   267→        return {
+   268→            "success": True,
+   269→            "positions": [
+   270→                {
+   271→                    "ticket": p.ticket,
+   272→                    "symbol": p.symbol,
+   273→                    "type": "BUY" if p.type == 0 else "SELL",
+   274→                    "volume": p.volume,
+   275→                    "open_price": p.price_open,
+   276→                    "current_price": p.price_current,
+   277→                    "sl": p.sl,
+   278→                    "tp": p.tp,
+   279→                    "profit": p.profit,
+   280→                    "swap": p.swap,
+   281→                    "comment": p.comment,
+   282→                    "time": str(p.time),
+   283→                }
+   284→                for p in positions
+   285→            ],
+   286→            "orders": [],
+   287→        }
+   288→    except Exception as e:
+   289→        return {"success": False, "error": str(e)}
+   290→
+   291→
+   292→@app.post("/api/trading/mt5-connect")
+   293→async def mt5_connect(req: MT5ConnectRequest):
+   294→    """Connect to a real MT5 account and return account info."""
+   295→    result = _connect_mt5(req.login, req.password, req.server)
+   296→    return result
+   297→
+   298→
+   299→@app.get("/api/trading/mt5-account")
+   300→async def mt5_account():
+   301→    """Get current MT5 account info (balance, equity, etc.)."""
+   302→    return _get_mt5_account()
+   303→
+   304→
+   305→@app.get("/api/trading/mt5-positions")
+   306→async def mt5_positions():
+   307→    """Get current MT5 open positions."""
+   308→    return _get_mt5_positions()
+   309→
+   310→
+   311→@app.post("/api/trading/mt5-disconnect")
+   312→async def mt5_disconnect():
+   313→    _disconnect_mt5()
+   314→    return {"success": True}
+   315→
+   316→
+   317→@app.get("/api/trading/mt5-status")
+   318→async def mt5_status():
+   319→    """Check if MT5 is connected and available."""
+   320→    return {
+   321→        "mt5_available": MT5_AVAILABLE,
+   322→        "connected": _mt5_connected,
+   323→        "account_login": _mt5_account_info.login if _mt5_account_info else None,
+   324→        "server": _mt5_account_info.server if _mt5_account_info else None,
+   325→    }
+   326→
+   327→
+   328→class MT5TradeRequest(BaseModel):
+   329→    symbol: str
+   330→    direction: str  # "BUY" or "SELL"
+   331→    volume: float
+   332→    sl: float
+   333→    tp: float
+   334→    comment: Optional[str] = "AI Cloud Trader"
+   335→
+   336→
+   337→class MT5CloseRequest(BaseModel):
+   338→    ticket: int
+   339→
+   340→
+   341→# ====================================================================
+   342→# MT5 Trade Execution
+   343→# ====================================================================
+   344→
+   345→
+   346→def _execute_mt5_trade(symbol: str, direction: str, volume: float, sl: float, tp: float, comment: str) -> dict:
+   347→    """Execute a market order on MT5."""
+   348→    global _mt5_connected
+   349→
+   350→    if not MT5_AVAILABLE:
+   351→        return {
+   352→            "success": False,
+   353→            "error": "MT5 library not available on this server. Trade execution requires Windows with the MT5 desktop application installed.",
+   354→            "mt5_available": False,
+   355→        }
+   356→
+   357→    if not _mt5_connected:
+   358→        return {"success": False, "error": "Not connected to MT5. Please reconnect."}
+   359→
+   360→    try:
+   361→        # Get symbol info for tick and volume constraints
+   362→        symbol_info = mt5.symbol_info(symbol)
+   363→        if symbol_info is None:
+   364→            return {"success": False, "error": f"Symbol {symbol} not found on broker"}
+   365→
+   366→        if not symbol_info.visible:
+   367→            if not mt5.symbol_select(symbol, True):
+   368→                return {"success": False, "error": f"Cannot select symbol {symbol}"}
+   369→            symbol_info = mt5.symbol_info(symbol)
+   370→
+   371→        tick = mt5.symbol_info_tick(symbol)
+   372→        if tick is None:
+   373→            return {"success": False, "error": f"Cannot get tick data for {symbol}"}
+   374→
+   375→        # Normalize volume to broker's step size
+   376→        volume_step = symbol_info.volume_step
+   377→        min_lot = symbol_info.volume_min
+   378→        max_lot = symbol_info.volume_max
+   379→
+   380→        volume = round(round(volume / volume_step) * volume_step, 8)
+   381→        volume = max(min_lot, min(max_lot, volume))
+   382→
+   383→        # Determine order type and price
+   384→        if direction.upper() == "BUY":
+   385→            order_type = mt5.ORDER_TYPE_BUY
+   386→            price = tick.ask
+   387→        elif direction.upper() == "SELL":
+   388→            order_type = mt5.ORDER_TYPE_SELL
+   389→            price = tick.bid
+   390→        else:
+   391→            return {"success": False, "error": f"Invalid direction: {direction}. Use BUY or SELL."}
+   392→
+   393→        # Determine filling mode
+   394→        filling_type = symbol_info.filling_mode
+   395→        if filling_type == 1:
+   396→            type_filling = mt5.ORDER_FILLING_FOK
+   397→        elif filling_type == 2:
+   398→            type_filling = mt5.ORDER_FILLING_IOC
+   399→        else:
+   400→            type_filling = mt5.ORDER_FILLING_RETURN
+   401→
+   402→        request = {
+   403→            "action": mt5.TRADE_ACTION_DEAL,
+   404→            "symbol": symbol,
+   405→            "volume": volume,
+   406→            "type": order_type,
+   407→            "price": price,
+   408→            "sl": sl,
+   409→            "tp": tp,
+   410→            "deviation": 20,
+   411→            "magic": 234000,
+   412→            "comment": comment or "AI Cloud Trader",
+   413→            "type_time": mt5.ORDER_TIME_GTC,
+   414→            "type_filling": type_filling,
+   415→        }
+   416→
+   417→        print(f"[MT5 Trade] Sending: {symbol} {direction} {volume} lots @ {price} SL={sl} TP={tp}")
+   418→        result = mt5.order_send(request)
+   419→
+   420→        if result is None:
+   421→            error_code = mt5.last_error()
+   422→            error_msg = _mt5_error_message(error_code)
+   423→            return {"success": False, "error": f"Order send failed: {error_msg}", "error_code": error_code}
+   424→
+   425→        if result.retcode != mt5.TRADE_RETCODE_DONE:
+   426→            error_msg = _mt5_error_message(result.retcode)
+   427→            return {
+   428→                "success": False,
+   429→                "error": error_msg,
+   430→                "retcode": result.retcode,
+   431→                "deal": result.deal,
+   432→                "order": result.order,
+   433→            }
+   434→
+   435→        # Get the opened position
+   436→        position = None
+   437→        if result.deal > 0:
+   438→            positions = mt5.positions_get(ticket=result.order)
+   439→            if positions and len(positions) > 0:
+   440→                p = positions[0]
+   441→                position = {
+   442→                    "ticket": p.ticket,
+   443→                    "symbol": p.symbol,
+   444→                    "type": "BUY" if p.type == 0 else "SELL",
+   445→                    "volume": p.volume,
+   446→                    "open_price": p.price_open,
+   447→                    "current_price": p.price_current,
+   448→                    "sl": p.sl,
+   449→                    "tp": p.tp,
+   450→                    "profit": 0.0,
+   451→                    "swap": 0.0,
+   452→                    "comment": p.comment,
+   453→                    "time": str(p.time),
+   454→                }
+   455→
+   456→        print(f"[MT5 Trade] SUCCESS: Deal #{result.deal} Order #{result.order} {symbol} {direction} {volume} @ {price}")
+   457→
+   458→        return {
+   459→            "success": True,
+   460→            "deal": result.deal,
+   461→            "order": result.order,
+   462→            "price": result.price,
+   463→            "volume": result.volume,
+   464→            "comment": result.comment,
+   465→            "position": position,
+   466→        }
+   467→
+   468→    except Exception as e:
+   469→        traceback.print_exc()
+   470→        return {"success": False, "error": str(e)}
+   471→
+   472→
+   473→def _close_mt5_position(ticket: int) -> dict:
+   474→    """Close an MT5 position by ticket."""
+   475→    if not MT5_AVAILABLE or not _mt5_connected:
+   476→        return {"success": False, "error": "Not connected to MT5"}
+   477→
+   478→    try:
+   479→        positions = mt5.positions_get(ticket=ticket)
+   480→        if not positions or len(positions) == 0:
+   481→            return {"success": False, "error": f"Position #{ticket} not found"}
+   482→
+   483→        pos = positions[0]
+   484→        tick = mt5.symbol_info_tick(pos.symbol)
+   485→        if tick is None:
+   486→            return {"success": False, "error": f"Cannot get tick for {pos.symbol}"}
+   487→
+   488→        # Close with opposite direction
+   489→        if pos.type == 0:  # BUY
+   490→            close_type = mt5.ORDER_TYPE_SELL
+   491→            price = tick.bid
+   492→        else:  # SELL
+   493→            close_type = mt5.ORDER_TYPE_BUY
+   494→            price = tick.ask
+   495→
+   496→        symbol_info = mt5.symbol_info(pos.symbol)
+   497→        filling_type = symbol_info.filling_mode
+   498→        if filling_type == 1:
+   499→            type_filling = mt5.ORDER_FILLING_FOK
+   500→        elif filling_type == 2:
+   501→            type_filling = mt5.ORDER_FILLING_IOC
+   502→        else:
+   503→            type_filling = mt5.ORDER_FILLING_RETURN
+   504→
+   505→        request = {
+   506→            "action": mt5.TRADE_ACTION_DEAL,
+   507→            "symbol": pos.symbol,
+   508→            "volume": pos.volume,
+   509→            "type": close_type,
+   510→            "position": pos.ticket,
+   511→            "price": price,
+   512→            "deviation": 20,
+   513→            "magic": 234000,
+   514→            "comment": "Close AI Trade",
+   515→            "type_time": mt5.ORDER_TIME_GTC,
+   516→            "type_filling": type_filling,
+   517→        }
+   518→
+   519→        print(f"[MT5 Close] Closing position #{ticket} {pos.symbol} {pos.volume} lots @ {price}")
+   520→        result = mt5.order_send(request)
+   521→
+   522→        if result is None or result.retcode != mt5.TRADE_RETCODE_DONE:
+   523→            error_code = result.retcode if result else mt5.last_error()
+   524→            return {"success": False, "error": _mt5_error_message(error_code), "retcode": error_code}
+   525→
+   526→        print(f"[MT5 Close] SUCCESS: Deal #{result.deal} closed position #{ticket}")
+   527→        return {
+   528→            "success": True,
+   529→            "deal": result.deal,
+   530→            "order": result.order,
+   531→            "price": result.price,
+   532→            "profit": pos.profit,
+   533→        }
+   534→
+   535→    except Exception as e:
+   536→        traceback.print_exc()
+   537→        return {"success": False, "error": str(e)}
+   538→
+   539→
+   540→def _mt5_error_message(code: int) -> str:
+   541→    """Map MT5 error codes to human-readable messages."""
+   542→    messages = {
+   543→        10004: "Requote",
+   544→        10006: "Request rejected",
+   545→        10007: "Request canceled by trader",
+   546→        10008: "Order placed",
+   547→        10009: "Request executed",
+   548→        10010: "Request partially executed",
+   549→        10011: "Request processing error",
+   550→        10012: "Request timed out",
+   551→        10013: "Invalid request",
+   552→        10014: "Invalid volume",
+   553→        10015: "Invalid price",
+   554→        10016: "Invalid stops",
+   555→        10017: "Trade disabled",
+   556→        10018: "Market closed",
+   557→        10019: "Not enough money",
+   558→        10020: "Prices changed",
+   559→        10021: "No quotes to process request",
+   560→        10022: "Invalid order expiration",
+   561→        10023: "Order state changed",
+   562→        10024: "Too many requests",
+   563→        10025: "No changes in request",
+   564→        10026: "Autotrading disabled by server",
+   565→        10027: "Autotrading disabled by client",
+   566→        10028: "Request locked for processing",
+   567→        10029: "Order or position frozen",
+   568→        10030: "Invalid order filling",
+   569→        10031: "No connection with trade server",
+   570→        10032: "Operation allowed only for live accounts",
+   571→        10033: "Pending orders limit reached",
+   572→        10034: "Volume limit for symbol reached",
+   573→        10035: "Incorrect or prohibited order type",
+   574→        10036: "Position with specified ID already closed",
+   575→        10038: "Close volume exceeds current position volume",
+   576→        10039: "Close order already exists",
+   577→        10040: "Positions limit reached",
+   578→        10041: "Pending order activation rejected",
+   579→        10042: "Only long positions allowed",
+   580→        10043: "Only short positions allowed",
+   581→        10044: "Only position close allowed",
+   582→        10045: "Position close allowed only by FIFO rule",
+   583→    }
+   584→    return messages.get(code, f"MT5 error {code}")
+   585→
+   586→
+   587→@app.post("/api/trading/mt5-trade")
+   588→async def mt5_trade(req: MT5TradeRequest):
+   589→    """Place a market order on MT5."""
+   590→    result = _execute_mt5_trade(
+   591→        symbol=req.symbol,
+   592→        direction=req.direction,
+   593→        volume=req.volume,
+   594→        sl=req.sl,
+   595→        tp=req.tp,
+   596→        comment=req.comment,
+   597→    )
+   598→    return result
+   599→
+   600→
+   601→@app.post("/api/trading/mt5-close-position")
+   602→async def mt5_close_position(req: MT5CloseRequest):
+   603→    """Close an MT5 position by ticket number."""
+   604→    result = _close_mt5_position(req.ticket)
+   605→    return result
+   606→
+   607→
+   608→# ====================================================================
+   609→# Account Endpoints
+   610→# ====================================================================
+   611→
+   612→
+   613→@app.get("/api/trading/account/{session_id}")
+   614→async def get_account(session_id: str):
+   615→    session = trading_engine.get_session(session_id)
+   616→    if not session:
+   617→        raise HTTPException(status_code=404, detail="Session not found")
+   618→    return trading_engine.get_account_data(session)
+   619→
+   620→
+   621→@app.get("/api/trading/positions/{session_id}")
+   622→async def get_positions(session_id: str):
+   623→    session = trading_engine.get_session(session_id)
+   624→    if not session:
+   625→        raise HTTPException(status_code=404, detail="Session not found")
+   626→    return {
+   627→        "positions": [p.to_dict() for p in session.positions],
+   628→        "orders": [],
+   629→    }
+   630→
+   631→
+   632→# ====================================================================
+   633→# Scan / Analysis Endpoints
+   634→# ====================================================================
+   635→
+   636→
+   637→@app.post("/api/trading/scan/{session_id}")
+   638→async def scan(session_id: str, req: ScanRequest = None):
+   639→    """Run multi-timeframe analysis on symbols."""
+   640→    session = trading_engine.get_session(session_id)
+   641→    if not session:
+   642→        raise HTTPException(status_code=404, detail="Session not found")
+   643→
+   644→    symbols = req.symbols if req and req.symbols else settings.DEFAULT_SYMBOLS
+   645→    results = []
+   646→
+   647→    for symbol in symbols:
+   648→        try:
+   649→            result = await asyncio.get_event_loop().run_in_executor(
+   650→                None, _analyze_symbol, symbol, session
+   651→            )
+   652→            results.append(result)
+   653→        except Exception as e:
+   654→            results.append({
+   655→                "symbol": symbol,
+   656→                "confluence": None,
+   657→                "decisions_count": 0,
+   658→                "actionable_signal": None,
+   659→                "errors": [str(e)],
+   660→                "risk_failures": None,
+   661→                "timeframes": {},
+   662→            })
+   663→
+   664→    return {"results": results}
+   665→
+   666→
+   667→def _analyze_symbol(symbol: str, session: TradingSession) -> Dict:
+   668→    """Analyze a single symbol across all timeframes."""
+   669→    tf_data: Dict[str, pd.DataFrame] = {}
+   670→    analyses: Dict[str, MarketAnalysis] = {}
+   671→    timeframe_results: Dict = {}
+   672→
+   673→    # Fetch candles for each timeframe
+   674→    for interval in settings.MTF_TIMEFRAMES:
+   675→        df = fetch_candles(symbol, interval)
+   676→        if df is not None:
+   677→            tf_data[interval] = df
+   678→
+   679→    # Analyze each available timeframe
+   680→    for interval, df in tf_data.items():
+   681→        try:
+   682→            analysis = multi_tf.analyze_timeframe(df, symbol, interval)
+   683→            analyses[interval] = analysis
+   684→
+   685→            # Map interval to display key (e.g. "1d" -> "D1")
+   686→            tf_display = {"1d": "D1", "4h": "H4", "1h": "H1", "15m": "M15", "5m": "M5"}.get(interval, interval.upper())
+   687→            bos_events = [b for b in analysis.structure_breaks if b.type == "BOS"]
+   688→            choch_events = [b for b in analysis.structure_breaks if b.type == "CHOCH"]
+   689→
+   690→            timeframe_results[tf_display] = {
+   691→                "trend": analysis.trend.value,
+   692→                "bias": analysis.bias.value,
+   693→                "atr": round(analysis.atr, 5) if analysis.atr else 0,
+   694→                "volatility": analysis.volatility_regime or "normal",
+   695→                "momentum": analysis.momentum or "neutral",
+   696→                "bos": len(bos_events),
+   697→                "choch": len(choch_events),
+   698→                "signals_count": len(analysis.signals),
+   699→                "structure_breaks": len(bos_events) + len(choch_events),
+   700→                "sr_levels": len(analysis.sr_levels),
+   701→            }
+   702→        except Exception as e:
+   703→            tf_display = {"1d": "D1", "4h": "H4", "1h": "H1", "15m": "M15", "5m": "M5"}.get(interval, interval.upper())
+   704→            timeframe_results[tf_display] = {"error": str(e)}
+   705→
+   706→    # Compute confluence across all timeframes
+   707→    confluence = multi_tf.compute_confluence(analyses)
+   708→
+   709→    # Find best signal across all timeframes
+   710→    best_signal = None
+   711→    for tf, analysis in analyses.items():
+   712→        if analysis.signals:
+   713→            for sig in analysis.signals:
+   714→                if best_signal is None or sig.confidence > best_signal.confidence:
+   715→                    best_signal = sig
+   716→
+   717→    # Run AI decision engine
+   718→    actionable = None
+   719→    risk_failures = None
+   720→    decisions_count = 0
+   721→
+   722→    if best_signal and best_signal.signal_type != SignalType.NO_TRADE:
+   723→        decision = ai_engine.evaluate(best_signal, confluence, session)
+   724→        decisions_count = 1
+   725→
+   726→        if decision["all_checks_passed"]:
+   727→            # Try to open the position
+   728→            direction = decision["direction"]
+   729→            pos = trading_engine.open_position(
+   730→                session=session,
+   731→                symbol=symbol,
+   732→                direction=direction,
+   733→                entry=best_signal.entry_price,
+   734→                sl=best_signal.stop_loss,
+   735→                tp=best_signal.take_profit,
+   736→                confidence=best_signal.confidence,
+   737→                reason=best_signal.reason,
+   738→            )
+   739→
+   740→            if pos:
+   741→                actionable = {
+   742→                    "symbol": symbol,
+   743→                    "direction": direction,
+   744→                    "entry": pos.open_price,
+   745→                    "sl": pos.sl,
+   746→                    "tp": pos.tp,
+   747→                    "volume": pos.volume,
+   748→                    "confidence": best_signal.confidence,
+   749→                    "risk_reward": best_signal.risk_reward,
+   750→                    "confirmation_factors": decision["confirmation_factors"],
+   751→                    "confluence": {
+   752→                        "direction": confluence["direction"],
+   753→                        "score": confluence["score"],
+   754→                        "trend_alignment": confluence["trend_alignment"],
+   755→                        "factors": confluence["factors"],
+   756→                    },
+   757→                }
+   758→            else:
+   759→                risk_failures = ["Position could not be opened (risk limits)"]
+   760→        else:
+   761→            risk_failures = decision["rejection_reasons"]
+   762→            decisions_count = 1
+   763→
+   764→    # Build confluence for response
+   765→    confluence_resp = None
+   766→    if confluence.get("factors") and confluence["factors"] != ["No data"]:
+   767→        confluence_resp = {
+   768→            "direction": confluence["direction"],
+   769→            "score": round(confluence["score"], 2),
+   770→            "trend_alignment": confluence["trend_alignment"],
+   771→            "factors": confluence["factors"],
+   772→            "higher_tf_bias": confluence["higher_tf_bias"].value,
+   773→            "bullish_ratio": round(confluence["bullish_ratio"], 2),
+   774→            "bearish_ratio": round(confluence["bearish_ratio"], 2),
+   775→        }
+   776→
+   777→    return {
+   778→        "symbol": symbol,
+   779→        "confluence": confluence_resp,
+   780→        "decisions_count": decisions_count,
+   781→        "actionable": actionable,
+   782→        "errors": [],
+   783→        "risk_failures": risk_failures,
+   784→        "timeframes": timeframe_results,
+   785→    }
+   786→
+   787→
+   788→# ====================================================================
+   789→# Trading Endpoints
+   790→# ====================================================================
+   791→
+   792→
+   793→@app.post("/api/trading/close/{session_id}/{ticket}")
+   794→async def close_position(session_id: str, ticket: int):
+   795→    session = trading_engine.get_session(session_id)
+   796→    if not session:
+   797→        raise HTTPException(status_code=404, detail="Session not found")
+   798→
+   799→    result = trading_engine.close_position_by_ticket(session, ticket)
+   800→    if result is None:
+   801→        raise HTTPException(status_code=404, detail="Position not found")
+   802→
+   803→    return {"success": True, "closed": result}
+   804→
+   805→
+   806→# ====================================================================
+   807→# Auto-Trade Endpoint
+   808→# ====================================================================
+   809→
+   810→
+   811→@app.post("/api/trading/auto-trade/{session_id}")
+   812→async def toggle_auto_trade(session_id: str, req: AutoTradeRequest):
+   813→    session = trading_engine.get_session(session_id)
+   814→    if not session:
+   815→        raise HTTPException(status_code=404, detail="Session not found")
+   816→
+   817→    session.auto_trade_enabled = req.enabled
+   818→    session.auto_trade_interval = req.interval_minutes
+   819→    session.auto_trade_last_scan = time.time() if req.enabled else None
+   820→
+   821→    return {
+   822→        "success": True,
+   823→        "auto_trade": req.enabled,
+   824→        "interval_minutes": req.interval_minutes,
+   825→    }
+   826→
+   827→
+   828→# ====================================================================
+   829→# Risk & Status Endpoints
+   830→# ====================================================================
+   831→
+   832→
+   833→@app.get("/api/trading/risk-status/{session_id}")
+   834→async def get_risk_status(session_id: str):
+   835→    session = trading_engine.get_session(session_id)
+   836→    if not session:
+   837→        raise HTTPException(status_code=404, detail="Session not found")
+   838→    return trading_engine.get_risk_status(session)
+   839→
+   840→
+   841→@app.get("/api/trading/ai-status")
+   842→async def get_ai_status():
+   843→    """Return AI engine configuration and status."""
+   844→    return {
+   845→        "strategy": "Naked Forex + Market Structure",
+   846→        "patterns": [p.value for p in PatternName if p != PatternName.NONE],
+   847→        "structure_analysis": ["BOS", "CHOCH", "Swing Points", "Liquidity Sweeps"],
+   848→        "mtf_timeframes": ["D1", "H1", "M15"],
+   849→        "symbols_focus": settings.DEFAULT_SYMBOLS,
+   850→        "brokers": ["Paper Trading", "OctaFX", "Exness", "Headway"],
+   851→        "confidence_threshold": settings.ai_confidence_threshold,
+   852→        "high_confidence": settings.ai_high_confidence,
+   853→        "risk_per_trade": settings.risk_per_trade,
+   854→        "max_daily_loss_pct": settings.max_daily_drawdown_pct,
+   855→        "max_consecutive_losses": settings.max_consecutive_losses,
+   856→        "max_open_positions": settings.max_open_positions,
+   857→        "max_trades_per_day": settings.max_trades_per_day,
+   858→        "max_spread_points": 0,  # No spread in paper trading
+   859→        "min_risk_reward": settings.min_risk_reward,
+   860→        "mode": "paper",
+   861→        "trailing_stop": False,
+   862→    }
+   863→
+   864→
+   865→@app.get("/api/trading/symbols")
+   866→async def get_symbols():
+   867→    """Return available symbols with current prices."""
+   868→    symbols_data = get_available_symbols()
+   869→    return {
+   870→        "symbols": [
+   871→            {"name": name, "price": data["price"]}
+   872→            for name, data in symbols_data.items()
+   873→        ]
+   874→    }
+   875→
+   876→
+   877→@app.get("/api/trading/health")
+   878→async def health():
+   879→    return {"status": "ok", "engine": "cloud", "version": "2.0.0"}
+   880→
+   881→
+   882→# ====================================================================
+   883→# Background Tasks
+   884→# ====================================================================
+   885→
+   886→
+   887→async def _background_price_updater():
+   888→    """Periodically update prices for all open positions."""
+   889→    while True:
+   890→        try:
+   891→            for session_id, session in list(trading_engine.sessions.items()):
+   892→                if session.positions:
+   893→                    trading_engine.update_positions(session)
+   894→        except Exception as e:
+   895→            print(f"[Background] Price update error: {e}")
+   896→        await asyncio.sleep(10)  # Update every 10 seconds
+   897→
+   898→
+   899→@app.on_event("startup")
+   900→async def startup():
+   901→    global _price_update_task
+   902→    _price_update_task = asyncio.create_task(_background_price_updater())
+   903→    print("[Engine] Cloud Trading Engine started on port 8001")
+   904→    print("[Engine] No MT5 dependency - uses real market data from Yahoo Finance")
+   905→
+   906→
+   907→@app.on_event("shutdown")
+   908→async def shutdown():
+   909→    if _price_update_task:
+   910→        _price_update_task.cancel()
+   911→
