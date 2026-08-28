@@ -228,9 +228,9 @@ export function WebTerminalPanel() {
               src={terminalUrl}
               className="w-full h-full border-0"
               style={{ minHeight: "600px" }}
-              allow="clipboard-read; clipboard-write"
+              allow="clipboard-read; clipboard-write; autoplay; camera; microphone"
               title="MetaTrader 5 Web Terminal — Live Trading"
-              sandbox="allow-same-origin allow-scripts allow-popups allow-forms allow-modals allow-popups-to-escape-sandbox allow-top-navigation"
+              onError={() => setLoadFailed(true)}
             />
           </CardContent>
         </Card>

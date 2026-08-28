@@ -32,7 +32,7 @@ export const BROKERS: BrokerConfig[] = [
     ],
     serverWebTerminalUrls: {},
     fallbackWebTerminalTemplate:
-      "https://metatraderweb.app/trade?startup_version=5&servers={server}",
+      "https://trade.mql5.com/trade?startup_version=5&servers={server}",
   },
   {
     id: "exness",
@@ -52,7 +52,7 @@ export const BROKERS: BrokerConfig[] = [
     ],
     serverWebTerminalUrls: {},
     fallbackWebTerminalTemplate:
-      "https://metatraderweb.app/trade?startup_version=5&servers={server}",
+      "https://trade.mql5.com/trade?startup_version=5&servers={server}",
   },
   {
     id: "headway",
@@ -81,7 +81,7 @@ export const BROKERS: BrokerConfig[] = [
     ],
     serverWebTerminalUrls: {},
     fallbackWebTerminalTemplate:
-      "https://metatraderweb.app/trade?startup_version=5&servers={server}",
+      "https://trade.mql5.com/trade?startup_version=5&servers={server}",
   },
   {
     id: "custom",
@@ -90,7 +90,7 @@ export const BROKERS: BrokerConfig[] = [
     servers: [],
     serverWebTerminalUrls: {},
     fallbackWebTerminalTemplate:
-      "https://metatraderweb.app/trade?startup_version=5&servers={server}",
+      "https://trade.mql5.com/trade?startup_version=5&servers={server}",
   },
 ];
 
@@ -98,18 +98,14 @@ export const BROKERS: BrokerConfig[] = [
 export function getWebTerminalUrl(brokerId: string, server: string): string {
   const broker = BROKERS.find((b) => b.id === brokerId);
   if (!broker) {
-    // Unknown broker – use generic MT5 URL with the server pre-filled
-    return `https://metatraderweb.app/trade?startup_version=5&servers=${encodeURIComponent(server)}`;
+    return `https://trade.mql5.com/trade?startup_version=5&servers=${encodeURIComponent(server)}`;
   }
-  // 1. Check if there's a broker-specific URL for this exact server
   const directUrl = broker.serverWebTerminalUrls[server];
   if (directUrl) return directUrl;
-  // 2. Fall back to the template with {server} replaced
   if (broker.fallbackWebTerminalTemplate) {
     return broker.fallbackWebTerminalTemplate.replace("{server}", encodeURIComponent(server));
   }
-  // 3. Last resort – generic MT5 terminal
-  return `https://metatraderweb.app/trade?startup_version=5&servers=${encodeURIComponent(server)}`;
+  return `https://trade.mql5.com/trade?startup_version=5&servers=${encodeURIComponent(server)}`;
 }
 
 export interface AccountInfo {
