@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
-const TRADING_ENGINE_URL = process.env.TRADING_ENGINE_URL || "https://caught-dietary-trading-perception.trycloudflare.com";
+const rawUrl = process.env.TRADING_ENGINE_URL || "https://caught-dietary-trading-perception.trycloudflare.com";
+const TRADING_ENGINE_URL = rawUrl.trim().replace(/\/+$/, "");
 
 async function proxyRequest(
   request: NextRequest,
@@ -11,7 +12,7 @@ async function proxyRequest(
   const pathStr = path.join("/");
 
   const targetPath = `/api/trading/${pathStr}`;
-  const targetUrl = `${TRADING_ENGINE_URL.replace(/\/$/, "")}${targetPath}`;
+  const targetUrl = `${TRADING_ENGINE_URL}${targetPath}`;
 
   try {
     const headers = new Headers(request.headers);
