@@ -19,14 +19,14 @@ const metricDefs: MetricCard[] = [
   {
     label: "Balance",
     icon: Wallet,
-    getValue: (a) => `$${a.balance.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+    getValue: (a) => `$${(a?.balance ?? 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
     getSubtext: () => "",
     colorClass: () => "text-foreground",
   },
   {
     label: "Equity",
     icon: TrendingUp,
-    getValue: (a) => `$${a.equity.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+    getValue: (a) => `$${(a?.equity ?? 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
     getSubtext: () => "",
     colorClass: () => "text-foreground",
   },
@@ -34,21 +34,24 @@ const metricDefs: MetricCard[] = [
     label: "Floating P&L",
     icon: DollarSign,
     getValue: (a) => {
-      const sign = a.profit >= 0 ? "+" : "";
-      return `${sign}$${a.profit.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+      const p = a?.profit ?? 0;
+      const sign = p >= 0 ? "+" : "";
+      return `${sign}$${p.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
     },
     getSubtext: (a) => {
-      const pct = a.balance > 0 ? ((a.profit / a.balance) * 100).toFixed(2) : "0.00";
-      return `${a.profit >= 0 ? "+" : ""}${pct}%`;
+      const b = a?.balance ?? 0;
+      const p = a?.profit ?? 0;
+      const pct = b > 0 ? ((p / b) * 100).toFixed(2) : "0.00";
+      return `${p >= 0 ? "+" : ""}${pct}%`;
     },
-    colorClass: (a) => (a.profit >= 0 ? "text-emerald-500" : "text-red-500"),
+    colorClass: (a) => ((a?.profit ?? 0) >= 0 ? "text-emerald-500" : "text-red-500"),
   },
   {
     label: "Margin Level",
     icon: Shield,
-    getValue: (a) => `${a.margin_level.toFixed(2)}%`,
-    getSubtext: (a) => `$${a.margin.toFixed(2)} used`,
-    colorClass: (a) => (a.margin_level < 150 ? "text-red-500" : a.margin_level < 300 ? "text-amber-500" : "text-foreground"),
+    getValue: (a) => `${(a?.margin_level ?? 0).toFixed(2)}%`,
+    getSubtext: (a) => `$${(a?.margin ?? 0).toFixed(2)} used`,
+    colorClass: (a) => ((a?.margin_level ?? 0) < 150 ? "text-red-500" : (a?.margin_level ?? 0) < 300 ? "text-amber-500" : "text-foreground"),
   },
 ];
 
