@@ -63,12 +63,10 @@ export const BROKERS: BrokerConfig[] = [
       "Headway-Real",
       "Headway-Live",
     ],
-    // Headway provides broker-specific MT5 web terminals (MT5 ONLY, no MT4 option)
-    serverWebTerminalUrls: {
-      "Headway-Demo": "https://hw.online/webterminal/mt5-demo",
-      "Headway-Real": "https://hw.online/webterminal/mt5-real",
-      "Headway-Live": "https://hw.online/webterminal/mt5-real",
-    },
+    // Headway MT5 universal web terminal
+    serverWebTerminalUrls: {},
+    fallbackWebTerminalTemplate:
+      "https://trade.mql5.com/trade?startup_version=5&servers={server}&trade_server={server}",
   },
   {
     id: "deriv",
@@ -81,7 +79,7 @@ export const BROKERS: BrokerConfig[] = [
     ],
     serverWebTerminalUrls: {},
     fallbackWebTerminalTemplate:
-      "https://trade.mql5.com/trade?startup_version=5&servers={server}",
+      "https://trade.mql5.com/trade?startup_version=5&servers={server}&trade_server={server}",
   },
   {
     id: "custom",
@@ -90,7 +88,7 @@ export const BROKERS: BrokerConfig[] = [
     servers: [],
     serverWebTerminalUrls: {},
     fallbackWebTerminalTemplate:
-      "https://trade.mql5.com/trade?startup_version=5&servers={server}",
+      "https://trade.mql5.com/trade?startup_version=5&servers={server}&trade_server={server}",
   },
 ];
 
@@ -98,14 +96,14 @@ export const BROKERS: BrokerConfig[] = [
 export function getWebTerminalUrl(brokerId: string, server: string): string {
   const broker = BROKERS.find((b) => b.id === brokerId);
   if (!broker) {
-    return `https://trade.mql5.com/trade?startup_version=5&servers=${encodeURIComponent(server)}`;
+    return `https://trade.mql5.com/trade?startup_version=5&servers=${encodeURIComponent(server)}&trade_server=${encodeURIComponent(server)}`;
   }
   const directUrl = broker.serverWebTerminalUrls[server];
   if (directUrl) return directUrl;
   if (broker.fallbackWebTerminalTemplate) {
-    return broker.fallbackWebTerminalTemplate.replace("{server}", encodeURIComponent(server));
+    return broker.fallbackWebTerminalTemplate.replace(/{server}/g, encodeURIComponent(server));
   }
-  return `https://trade.mql5.com/trade?startup_version=5&servers=${encodeURIComponent(server)}`;
+  return `https://trade.mql5.com/trade?startup_version=5&servers=${encodeURIComponent(server)}&trade_server=${encodeURIComponent(server)}`;
 }
 
 export interface AccountInfo {
