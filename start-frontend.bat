@@ -44,6 +44,6 @@ echo [INFO] Keep this window open while using the app.
 echo [INFO] Press Ctrl+C to stop the server.
 echo.
 
-npx next dev -p 3000
+npx next dev --webpack -p 3000
 
 pause

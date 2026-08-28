@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
-const TRADING_ENGINE_PORT = process.env.TRADING_ENGINE_PORT || "8001";
+const TRADING_ENGINE_URL = process.env.TRADING_ENGINE_URL || `http://127.0.0.1:${process.env.TRADING_ENGINE_PORT || "8001"}`;
 
 async function proxyRequest(
   request: NextRequest,
@@ -11,7 +11,7 @@ async function proxyRequest(
   const pathStr = path.join("/");
 
   const targetPath = `/api/trading/${pathStr}`;
-  const targetUrl = `http://127.0.0.1:${TRADING_ENGINE_PORT}${targetPath}`;
+  const targetUrl = `${TRADING_ENGINE_URL.replace(/\/$/, "")}${targetPath}`;
 
   try {
     const headers = new Headers(request.headers);

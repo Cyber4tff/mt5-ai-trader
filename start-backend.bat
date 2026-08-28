@@ -5,26 +5,29 @@ echo   MT5 AI Trading Engine - Starting Backend
 echo ============================================
 echo.
 
-REM Check if Python is installed
-python --version >nul 2>&1
-if %ERRORLEVEL% neq 0 (
-    echo [ERROR] Python is not installed or not in PATH!
-    echo Please install Python 3.10+ from https://www.python.org/downloads/
-    echo Make sure to check "Add Python to PATH" during installation.
-    echo.
-    pause
-    exit /b 1
+REM Locate Python interpreter (prefer Python 3.10 to avoid Application Control DLL restrictions)
+set "PYTHON_EXE="
+
+if exist "C:\Users\cyber\AppData\Local\Programs\Python\Python310\python.exe" (
+    set "PYTHON_EXE=C:\Users\cyber\AppData\Local\Programs\Python\Python310\python.exe"
+) else (
+    py -3.10 --version >nul 2>&1
+    if %ERRORLEVEL% equ 0 (
+        set "PYTHON_EXE=py -3.10"
+    ) else (
+        set "PYTHON_EXE=python"
+    )
 )
 
-echo [OK] Python found:
-python --version
+echo [OK] Using Python interpreter: %PYTHON_EXE%
+%PYTHON_EXE% --version
 echo.
 
 REM Navigate to the trading engine folder
 cd /d "%~dp0mini-services\trading-engine"
 
 echo [INFO] Checking Python dependencies...
-pip install -r requirements.txt
+%PYTHON_EXE% -m pip install -r requirements.txt
 if %ERRORLEVEL% neq 0 (
     echo [ERROR] Failed to install Python dependencies!
     pause
@@ -37,6 +40,6 @@ echo [INFO] Keep this window open while using the app.
 echo [INFO] Press Ctrl+C to stop the engine.
 echo.
 
-python -m uvicorn engine.main:app --host 0.0.0.0 --port 8001 --reload --reload-dir engine
+%PYTHON_EXE% -m uvicorn engine.main:app --host 0.0.0.0 --port 8001 --reload --reload-dir engine
 
 pause

@@ -790,6 +790,41 @@ def _analyze_symbol(symbol: str, session: TradingSession) -> Dict:
 # ====================================================================
 
 
+class ManualTradeRequest(BaseModel):
+    symbol: str = "EURUSD=X"
+    direction: str = "BUY"
+    volume: float = 0.10
+    sl: Optional[float] = None
+    tp: Optional[float] = None
+    confidence: float = 0.85
+    reason: str = "Manual AI Test Signal"
+
+
+@app.post("/api/trading/order/{session_id}")
+async def place_manual_order(session_id: str, req: ManualTradeRequest):
+    session = trading_engine.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    price = fetch_current_price(req.symbol) or 1.0850
+    sl = req.sl if req.sl else (price - 0.0030 if req.direction.upper() == "BUY" else price + 0.0030)
+    tp = req.tp if req.tp else (price + 0.0060 if req.direction.upper() == "BUY" else price - 0.0060)
+
+    pos = trading_engine.open_position(
+        session=session,
+        symbol=req.symbol,
+        direction=req.direction,
+        entry=price,
+        sl=sl,
+        tp=tp,
+        confidence=req.confidence,
+        reason=req.reason,
+    )
+    if not pos:
+        raise HTTPException(status_code=400, detail="Could not open position (check risk limits)")
+    return {"success": True, "position": pos.to_dict()}
+
+
 @app.post("/api/trading/close/{session_id}/{ticket}")
 async def close_position(session_id: str, ticket: int):
     session = trading_engine.get_session(session_id)
