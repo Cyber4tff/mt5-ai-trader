@@ -79,12 +79,9 @@ export const BROKERS: BrokerConfig[] = [
       "Deriv-Server",
       "Deriv-Server-02",
     ],
-    serverWebTerminalUrls: {
-      "Deriv-Demo": "https://app.deriv.com/",
-      "Deriv-Server": "https://app.deriv.com/",
-      "Deriv-Server-02": "https://app.deriv.com/",
-    },
-    fallbackWebTerminalTemplate: "https://app.deriv.com/",
+    serverWebTerminalUrls: {},
+    fallbackWebTerminalTemplate:
+      "https://metatraderweb.app/trade?startup_version=5&servers={server}",
   },
   {
     id: "custom",
