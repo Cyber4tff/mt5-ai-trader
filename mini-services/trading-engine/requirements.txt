@@ -8,3 +8,4 @@ numpy>=1.26.0
 pandas>=2.1.0
 yfinance>=0.2.31
 MetaTrader5>=5.0.45
+websockets>=12.0

@@ -71,6 +71,22 @@ export const BROKERS: BrokerConfig[] = [
     },
   },
   {
+    id: "deriv",
+    name: "Deriv (Forex & Synthetics)",
+    logo: "D",
+    servers: [
+      "Deriv-Demo",
+      "Deriv-Server",
+      "Deriv-Server-02",
+    ],
+    serverWebTerminalUrls: {
+      "Deriv-Demo": "https://app.deriv.com/",
+      "Deriv-Server": "https://app.deriv.com/",
+      "Deriv-Server-02": "https://app.deriv.com/",
+    },
+    fallbackWebTerminalTemplate: "https://app.deriv.com/",
+  },
+  {
     id: "custom",
     name: "Custom Broker",
     logo: "C",

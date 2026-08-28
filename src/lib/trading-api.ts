@@ -135,56 +135,49 @@ export const tradingApi = {
     return apiFetch<{ positions: Record<string, unknown>[]; orders: Record<string, unknown>[] }>(`/positions/${sessionId}`);
   },
 
-  // ── MT5 Direct Connection ────────────────────────────────
-  mt5Connect(login: number, password: string, server: string) {
-    return apiFetch<MT5ConnectResponse>("/mt5-connect", {
+  // ── MT5 Real Connect / Trade ──────────────────────────────────────────
+  mt5Connect: (login: number, password: string, server: string) =>
+    apiFetch<MT5ConnectResponse>("/mt5-connect", {
       method: "POST",
       body: JSON.stringify({ login, password, server }),
-    });
-  },
+    }),
 
-  mt5Account() {
-    return apiFetch<MT5AccountResponse>("/mt5-account");
-  },
+  mt5Account: () => apiFetch<MT5AccountResponse>("/mt5-account"),
 
-  mt5Status() {
-    return apiFetch<{ mt5_available: boolean; connected: boolean; account_login: number | null; server: string | null }>("/mt5-status");
-  },
+  mt5Positions: () => apiFetch<{ success: boolean; positions: Array<{ ticket: number; symbol: string; type: string; volume: number; open_price: number; current_price: number; sl: number; tp: number; profit: number; swap: number; comment: string; time: string }>; error?: string }>("/mt5-positions"),
 
-  mt5Disconnect() {
-    return apiFetch<{ success: boolean }>("/mt5-disconnect", { method: "POST" });
-  },
-
-  // ── MT5 Trade Execution ────────────────────────────────
-  mt5Trade(data: {
-    symbol: string;
-    direction: "BUY" | "SELL";
-    volume: number;
-    sl: number;
-    tp: number;
-    comment?: string;
-  }) {
-    return apiFetch<MT5TradeResponse>("/mt5-trade", {
+  mt5Trade: (params: { symbol: string; direction: string; volume: number; sl: number; tp: number; comment?: string }) =>
+    apiFetch<MT5TradeResponse>("/mt5-trade", {
       method: "POST",
-      body: JSON.stringify(data),
-    });
-  },
+      body: JSON.stringify(params),
+    }),
 
-  mt5ClosePosition(ticket: number) {
-    return apiFetch<MT5CloseResponse>("/mt5-close-position", {
+  mt5ClosePosition: (ticket: number) =>
+    apiFetch<{ success: boolean; deal?: number; order?: number; price?: number; profit?: number; error?: string }>("/mt5-close-position", {
       method: "POST",
       body: JSON.stringify({ ticket }),
-    });
-  },
+    }),
 
-  mt5Positions() {
-    return apiFetch<{
-      success: boolean;
-      positions: Record<string, unknown>[];
-      orders: Record<string, unknown>[];
-      error?: string;
-    }>("/mt5-positions");
-  },
+  mt5Status: () => apiFetch<{ mt5_available: boolean; connected: boolean; account_login?: number; server?: string }>("/mt5-status"),
+
+  // ── Deriv Broker WebSocket API ──────────────────────────────────────────
+  derivConnect: (api_token: string) =>
+    apiFetch<{ success: boolean; account?: { login?: string; email?: string; currency?: string; balance?: number; account_type?: string }; error?: string }>("/deriv-connect", {
+      method: "POST",
+      body: JSON.stringify({ api_token }),
+    }),
+
+  derivAccount: () =>
+    apiFetch<{ success: boolean; balance?: number; currency?: string; error?: string }>("/deriv-account"),
+
+  derivStatus: () =>
+    apiFetch<{ connected: boolean; account?: { login?: string; balance?: number; currency?: string; account_type?: string } }>("/deriv-status"),
+
+  derivTrade: (params: { symbol: string; direction: string; amount: number; duration?: number; duration_unit?: string }) =>
+    apiFetch<{ success: boolean; contract_id?: number; symbol?: string; direction?: string; amount?: number; error?: string }>("/deriv-trade", {
+      method: "POST",
+      body: JSON.stringify(params),
+    }),
 
   // ── Scanning ────────────────────────────────────────────
   scan(sessionId: string, data?: { symbols?: string[]; entry_timeframe?: string }) {

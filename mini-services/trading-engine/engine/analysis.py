@@ -785,17 +785,19 @@ class AIDecisionEngine:
         checks_passed = []
         checks_failed = []
 
-        # 1. Trend alignment
-        if confluence.get("trend_alignment"):
-            checks_passed.append("All TFs aligned")
+        # 1. Trend alignment (Naked Forex: >= 50% TF alignment or higher TF direction)
+        conf_score = confluence.get("score", 0.0)
+        direction = confluence.get("direction", "neutral")
+        if confluence.get("trend_alignment") or conf_score >= 0.5 or direction != "neutral":
+            checks_passed.append(f"TF Confluence Aligned ({conf_score:.0%})")
         else:
             checks_failed.append("Insufficient TF alignment")
 
         # 2. Confluence score
-        if confluence.get("score", 0) >= 0.6:
-            checks_passed.append(f"Confluence {confluence['score']:.0%}")
+        if conf_score >= 0.5:
+            checks_passed.append(f"Confluence {conf_score:.0%}")
         else:
-            checks_failed.append(f"Low confluence {confluence.get('score', 0):.0%}")
+            checks_failed.append(f"Low confluence {conf_score:.0%}")
 
         # 3. Confidence threshold
         if signal.confidence >= self.settings.ai_confidence_threshold:

@@ -34,6 +34,7 @@ from engine.models import (
 )
 from engine.paper_trading import PaperTradingEngine
 from engine.settings import settings
+from engine.deriv_client import deriv_client
 
 # Try to import MetaTrader5 (Windows only, requires MT5 desktop app)
 MT5_AVAILABLE = False
@@ -96,6 +97,19 @@ class MT5ConnectRequest(BaseModel):
     login: int
     password: str
     server: str
+
+
+class DerivConnectRequest(BaseModel):
+    api_token: str
+    app_id: Optional[int] = 1089
+
+
+class DerivTradeRequest(BaseModel):
+    symbol: str = "R_100"
+    direction: str = "BUY"  # BUY or SELL
+    amount: float = 10.0
+    duration: int = 15
+    duration_unit: str = "m"
 
 
 # ====================================================================
@@ -323,6 +337,44 @@ async def mt5_status():
         "account_login": _mt5_account_info.login if _mt5_account_info else None,
         "server": _mt5_account_info.server if _mt5_account_info else None,
     }
+
+
+# ── Deriv Broker Endpoints ─────────────────────────────────────────
+
+@app.post("/api/trading/deriv-connect")
+async def deriv_connect(req: DerivConnectRequest):
+    """Connect to Deriv account via WebSocket API."""
+    result = await deriv_client.connect_and_authorize(req.api_token)
+    return result
+
+
+@app.get("/api/trading/deriv-account")
+async def deriv_account():
+    """Get current Deriv balance & account info."""
+    return await deriv_client.get_balance()
+
+
+@app.get("/api/trading/deriv-status")
+async def deriv_status():
+    """Get Deriv connection status."""
+    return {
+        "connected": deriv_client.authorized,
+        "account": deriv_client.account_info if deriv_client.authorized else None,
+    }
+
+
+@app.post("/api/trading/deriv-trade")
+async def deriv_trade(req: DerivTradeRequest):
+    """Execute trade contract on Deriv."""
+    result = await deriv_client.execute_trade(
+        symbol=req.symbol,
+        direction=req.direction,
+        amount=req.amount,
+        duration=req.duration,
+        duration_unit=req.duration_unit,
+    )
+    return result
+
 
 
 class MT5TradeRequest(BaseModel):
