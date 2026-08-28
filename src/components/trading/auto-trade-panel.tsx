@@ -33,6 +33,16 @@ export function AutoTradePanel() {
   // Auto-execute confirmation dialog
   const [showAutoExecDialog, setShowAutoExecDialog] = useState(false)
   const [pendingAutoExec, setPendingAutoExec] = useState(false)
+  const [scalpingMode, setScalpingMode] = useState(false)
+
+  const handleScalpingToggle = useCallback(
+    async (checked: boolean) => {
+      setScalpingMode(checked)
+      await toggleAutoTrade(autoTrade.enabled, localInterval, checked)
+      toast.success(checked ? "Naked Scalper Mode ON (Short Trades)" : "Naked Scalper Mode OFF")
+    },
+    [autoTrade.enabled, localInterval, toggleAutoTrade]
+  )
 
   // ── Auto-scan interval timer ─────────────────────────────
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -243,6 +253,28 @@ export function AutoTradePanel() {
               </div>
             </>
           )}
+
+          {/* Naked Forex Scalper Mode (Short Trades) Toggle */}
+          <div className="p-3 rounded-lg border border-indigo-500/20 bg-indigo-500/5 space-y-2">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Zap className="size-4 text-indigo-400" />
+                <div>
+                  <p className="text-xs font-semibold text-foreground">Naked Scalper Mode</p>
+                  <p className="text-[10px] text-muted-foreground">Short-duration 1m-5m fast trades for all brokers</p>
+                </div>
+              </div>
+              <Switch
+                checked={scalpingMode}
+                onCheckedChange={handleScalpingToggle}
+              />
+            </div>
+            {scalpingMode && (
+              <p className="text-[10px] text-indigo-400 leading-relaxed font-medium">
+                ⚡ Active: Bot executes high-frequency Naked Forex pinbar & engulfing scalps with tight ATR stops.
+              </p>
+            )}
+          </div>
 
           {/* Scan Interval Slider */}
           <div className="space-y-2">

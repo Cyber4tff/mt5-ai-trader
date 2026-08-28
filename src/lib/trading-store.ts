@@ -905,26 +905,22 @@ export const useTradingStore = create<TradingStore>((set, get) => ({
     }
   },
 
-  // ── Auto Trade ──────────────────────────────────────────────────────
-  toggleAutoTrade: async (enabled, interval) => {
+  // ── Auto Trade (24/7 Autonomous Background Worker) ──────────────────
+  toggleAutoTrade: async (enabled, interval, scalpingMode) => {
     const state = get();
     const intervalMin = interval ?? state.autoTrade.intervalMinutes;
     set((s) => ({
       autoTrade: { ...s.autoTrade, enabled, intervalMinutes: intervalMin },
-      scanLog: log(s, `Auto-trade ${enabled ? "ENABLED" : "DISABLED"} (interval: ${intervalMin}min)`),
+      scanLog: log(s, `24/7 Auto-trade ${enabled ? "ENABLED" : "DISABLED"} (interval: ${intervalMin}m${scalpingMode ? " | Naked Scalper ON" : ""})`),
     }));
 
-    // In live mode, scanning is client-driven — no backend toggle needed
-    if (state.connection.mode === "live") return;
-
-    const sessionId = state.connection.analysisSessionId || state.connection.sessionId;
-    if (!sessionId) return;
+    const sessionId = state.connection.analysisSessionId || state.connection.sessionId || "session_123";
 
     try {
       await tradingApi.toggleAutoTrade(sessionId, enabled, intervalMin);
     } catch (error) {
       const msg = error instanceof Error ? error.message : "Unknown error";
-      set((s) => ({ scanLog: log(s, `Auto-trade error: ${msg}`) }));
+      set((s) => ({ scanLog: log(s, `Auto-trade sync error: ${msg}`) }));
     }
   },
 

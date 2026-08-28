@@ -895,20 +895,95 @@ async def close_position(session_id: str, ticket: int):
 # ====================================================================
 
 
+class AutoTradeRequest(BaseModel):
+    enabled: bool
+    interval_minutes: int = 15
+    scalping_mode: Optional[bool] = False
+
+
+# ── 24/7 Background Autonomous Worker Loop ───────────────────────────
+
+_auto_trade_running = True  # Enable 24/7 auto-trading background loop by default!
+_auto_trade_interval_minutes = 5
+_scalping_mode_enabled = False
+_247_worker_task: Optional[asyncio.Task] = None
+scalper = NakedForexScalperStrategy()
+
+
+async def _247_autonomous_worker_loop():
+    """Autonomous 24/7 background scanner & trade execution loop. Runs non-stop even when browser is closed."""
+    global _auto_trade_running, _auto_trade_interval_minutes, _scalping_mode_enabled
+    print("[24/7 Auto-Trader] Autonomous background trading loop ACTIVE.")
+
+    while True:
+        try:
+            if _auto_trade_running:
+                print(f"[24/7 Auto-Trader] Scanning markets 24/7 (Scalper Mode: {_scalping_mode_enabled}, Interval: {_auto_trade_interval_minutes}m)...")
+                symbols = settings.DEFAULT_SYMBOLS
+
+                for sym in symbols:
+                    try:
+                        df = fetch_candles(sym, "5m" if _scalping_mode_enabled else "15m")
+                        if df is not None and not df.empty:
+                            if _scalping_mode_enabled:
+                                scalp_signals = scalper.analyze_scalp(df, sym, timeframe="5m")
+                                if scalp_signals:
+                                    best_sig = scalp_signals[0]
+                                    direction = best_sig.signal_type.value
+                                    print(f"[24/7 Scalper Signal] {sym} {direction} @ {best_sig.entry_price} SL={best_sig.stop_loss} TP={best_sig.take_profit}")
+                                    if MT5_AVAILABLE and _mt5_connected:
+                                        _execute_mt5_trade(sym, direction, 0.10, best_sig.stop_loss, best_sig.take_profit, "Naked Forex Scalper")
+                                    if deriv_client.authorized:
+                                        await deriv_client.execute_trade(sym, direction, 10.0, 15, "m")
+                            else:
+                                session = trading_engine.get_session("session_123")
+                                if not session:
+                                    session = trading_engine.create_session("Paper Trading")
+                                res = _analyze_symbol(sym, session)
+                                if res.get("actionable"):
+                                    act = res["actionable"]
+                                    direction = act["direction"]
+                                    print(f"[24/7 Auto Trade Trigger] {sym} {direction} @ {act['entry']}")
+                                    if MT5_AVAILABLE and _mt5_connected:
+                                        _execute_mt5_trade(sym, direction, 0.10, act["sl"], act["tp"], "Naked Forex 24/7")
+                                    if deriv_client.authorized:
+                                        await deriv_client.execute_trade(sym, direction, 10.0, 15, "m")
+                    except Exception as e:
+                        print(f"[24/7 Auto-Trader Error] {sym}: {e}")
+
+            await asyncio.sleep(max(60, _auto_trade_interval_minutes * 60))
+        except asyncio.CancelledError:
+            print("[24/7 Auto-Trader] Background loop stopped.")
+            break
+        except Exception as e:
+            print(f"[24/7 Auto-Trader Exception] {e}")
+            await asyncio.sleep(60)
+
+
+@app.on_event("startup")
+async def startup_event():
+    global _247_worker_task
+    _247_worker_task = asyncio.create_task(_247_autonomous_worker_loop())
+
+
 @app.post("/api/trading/auto-trade/{session_id}")
 async def toggle_auto_trade(session_id: str, req: AutoTradeRequest):
+    global _auto_trade_running, _auto_trade_interval_minutes, _scalping_mode_enabled
     session = trading_engine.get_session(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
+    if session:
+        session.auto_trade_enabled = req.enabled
+        session.auto_trade_interval = req.interval_minutes
 
-    session.auto_trade_enabled = req.enabled
-    session.auto_trade_interval = req.interval_minutes
-    session.auto_trade_last_scan = time.time() if req.enabled else None
+    _auto_trade_running = req.enabled
+    _auto_trade_interval_minutes = req.interval_minutes
+    if req.scalping_mode is not None:
+        _scalping_mode_enabled = req.scalping_mode
 
     return {
         "success": True,
         "auto_trade": req.enabled,
         "interval_minutes": req.interval_minutes,
+        "scalping_mode": _scalping_mode_enabled,
     }
 
 

@@ -658,6 +658,71 @@ class NakedForexStrategy:
         return signals[:3]
 
 
+class NakedForexScalperStrategy(NakedForexStrategy):
+    """Naked Forex Scalping Strategy for fast short-duration trades (1m, 5m, 15m timeframes).
+    Features tight ATR stop-losses, fast 1:1.5 - 1:2 R:R targets, and micro-structure pinbar/engulfing triggers.
+    """
+    name: str = "naked_forex_scalper"
+
+    def analyze_scalp(self, df: pd.DataFrame, symbol: str, timeframe: str = "5m", sr_levels=None) -> list:
+        if df is None or len(df) < 20:
+            return []
+
+        trend = self.identify_trend(df.tail(30))
+        if sr_levels is None:
+            sr_levels = self.sr_detector.detect_levels(df, n_levels=3)
+
+        signals = []
+        last_idx = len(df) - 1
+
+        for pattern_fn in [self.is_big_shadow, self.is_kangaroo_tail]:
+            valid, name = pattern_fn(df, last_idx)
+            if not valid and last_idx >= 1:
+                valid, name = pattern_fn(df, last_idx - 1)
+
+            if valid:
+                is_bullish = "bullish" in name
+                atr = self.get_latest_atr(df, 14)
+                if atr <= 0:
+                    continue
+
+                curr = df.iloc[-1]
+                close_p = float(curr["close"])
+                high_p = float(curr["high"])
+                low_p = float(curr["low"])
+
+                # Fast Scalp Entry & Targets
+                if is_bullish:
+                    entry = close_p
+                    sl = low_p - 0.2 * atr
+                    tp = entry + 1.5 * abs(entry - sl)
+                    sig_type = SignalType.BUY
+                else:
+                    entry = close_p
+                    sl = high_p + 0.2 * atr
+                    tp = entry - 1.5 * abs(entry - sl)
+                    sig_type = SignalType.SELL
+
+                risk = abs(entry - sl)
+                reward = abs(tp - entry)
+                rr = reward / risk if risk > 0 else 0
+
+                signals.append(TradeSignal(
+                    symbol=symbol,
+                    signal_type=sig_type,
+                    entry_price=entry,
+                    stop_loss=sl,
+                    take_profit=tp,
+                    confidence=0.85,
+                    pattern=PatternName.BIG_SHADOW_BULL if is_bullish else PatternName.BIG_SHADOW_BEAR,
+                    timeframe=timeframe,
+                    reason=f"Naked Forex Scalp {name} on {timeframe}",
+                    risk_reward=rr,
+                ))
+
+        return signals
+
+
 # ====================================================================
 # Multi-Timeframe Confluence
 # ====================================================================
