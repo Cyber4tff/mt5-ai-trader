@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
-const TRADING_ENGINE_URL = process.env.TRADING_ENGINE_URL || `http://127.0.0.1:${process.env.TRADING_ENGINE_PORT || "8001"}`;
+const TRADING_ENGINE_URL = process.env.TRADING_ENGINE_URL || "https://mt5-ai-trader-app.loca.lt";
 
 async function proxyRequest(
   request: NextRequest,
@@ -17,6 +17,7 @@ async function proxyRequest(
     const headers = new Headers(request.headers);
     headers.delete("host");
     headers.delete("connection");
+    headers.set("bypass-tunnel-reminder", "true");
 
     const body = method !== "GET" ? await request.text() : undefined;
 
