@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
-const TRADING_ENGINE_URL = process.env.TRADING_ENGINE_URL || "https://mt5-ai-trader-app.loca.lt";
+const TRADING_ENGINE_URL = process.env.TRADING_ENGINE_URL || "https://caught-dietary-trading-perception.trycloudflare.com";
 
 async function proxyRequest(
   request: NextRequest,
