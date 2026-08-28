@@ -16,6 +16,7 @@ from engine.analysis import (
     MarketStructureAnalyzer,
     MultiTimeframeAnalyzer,
     NakedForexStrategy,
+    NakedForexScalperStrategy,
     SupportResistanceDetector,
     calculate_atr_value,
 )
@@ -35,6 +36,8 @@ from engine.models import (
 from engine.paper_trading import PaperTradingEngine
 from engine.settings import settings
 from engine.deriv_client import deriv_client
+from engine.news_filter import news_filter
+from engine.telegram_notifier import telegram_notifier
 
 # Try to import MetaTrader5 (Windows only, requires MT5 desktop app)
 MT5_AVAILABLE = False
@@ -913,7 +916,7 @@ scalper = NakedForexScalperStrategy()
 async def _247_autonomous_worker_loop():
     """Autonomous 24/7 background scanner & trade execution loop. Runs non-stop even when browser is closed."""
     global _auto_trade_running, _auto_trade_interval_minutes, _scalping_mode_enabled
-    print("[24/7 Auto-Trader] Autonomous background trading loop ACTIVE.")
+    print("[24/7 Auto-Trader] Autonomous background trading loop ACTIVE with News Filter & Telegram Alerts.")
 
     while True:
         try:
@@ -923,6 +926,12 @@ async def _247_autonomous_worker_loop():
 
                 for sym in symbols:
                     try:
+                        # 1. Economic News Blackout Check
+                        is_blackout, reason = news_filter.is_news_blackout(sym)
+                        if is_blackout:
+                            print(f"[24/7 Auto-Trader] 🛑 TRADE PAUSED for {sym}: {reason}")
+                            continue
+
                         df = fetch_candles(sym, "5m" if _scalping_mode_enabled else "15m")
                         if df is not None and not df.empty:
                             if _scalping_mode_enabled:
@@ -931,10 +940,18 @@ async def _247_autonomous_worker_loop():
                                     best_sig = scalp_signals[0]
                                     direction = best_sig.signal_type.value
                                     print(f"[24/7 Scalper Signal] {sym} {direction} @ {best_sig.entry_price} SL={best_sig.stop_loss} TP={best_sig.take_profit}")
+
+                                    # Execute MT5
                                     if MT5_AVAILABLE and _mt5_connected:
-                                        _execute_mt5_trade(sym, direction, 0.10, best_sig.stop_loss, best_sig.take_profit, "Naked Forex Scalper")
+                                        res = _execute_mt5_trade(sym, direction, 0.10, best_sig.stop_loss, best_sig.take_profit, "Naked Forex Scalper")
+                                        if res.get("success"):
+                                            await telegram_notifier.notify_trade_opened(sym, direction, 0.10, best_sig.entry_price, best_sig.stop_loss, best_sig.take_profit, broker="MT5 Live", ticket=res.get("deal"))
+
+                                    # Execute Deriv
                                     if deriv_client.authorized:
-                                        await deriv_client.execute_trade(sym, direction, 10.0, 15, "m")
+                                        d_res = await deriv_client.execute_trade(sym, direction, 10.0, 15, "m")
+                                        if d_res.get("success"):
+                                            await telegram_notifier.notify_trade_opened(sym, direction, 10.0, best_sig.entry_price, best_sig.stop_loss, best_sig.take_profit, broker="Deriv WebSocket", ticket=d_res.get("contract_id"))
                             else:
                                 session = trading_engine.get_session("session_123")
                                 if not session:
@@ -944,10 +961,16 @@ async def _247_autonomous_worker_loop():
                                     act = res["actionable"]
                                     direction = act["direction"]
                                     print(f"[24/7 Auto Trade Trigger] {sym} {direction} @ {act['entry']}")
+
                                     if MT5_AVAILABLE and _mt5_connected:
-                                        _execute_mt5_trade(sym, direction, 0.10, act["sl"], act["tp"], "Naked Forex 24/7")
+                                        res = _execute_mt5_trade(sym, direction, 0.10, act["sl"], act["tp"], "Naked Forex 24/7")
+                                        if res.get("success"):
+                                            await telegram_notifier.notify_trade_opened(sym, direction, 0.10, act["entry"], act["sl"], act["tp"], broker="MT5 Live", ticket=res.get("deal"))
+
                                     if deriv_client.authorized:
-                                        await deriv_client.execute_trade(sym, direction, 10.0, 15, "m")
+                                        d_res = await deriv_client.execute_trade(sym, direction, 10.0, 15, "m")
+                                        if d_res.get("success"):
+                                            await telegram_notifier.notify_trade_opened(sym, direction, 10.0, act["entry"], act["sl"], act["tp"], broker="Deriv WebSocket", ticket=d_res.get("contract_id"))
                     except Exception as e:
                         print(f"[24/7 Auto-Trader Error] {sym}: {e}")
 
@@ -958,6 +981,18 @@ async def _247_autonomous_worker_loop():
         except Exception as e:
             print(f"[24/7 Auto-Trader Exception] {e}")
             await asyncio.sleep(60)
+
+
+class TelegramConfigRequest(BaseModel):
+    bot_token: str
+    chat_id: str
+
+
+@app.post("/api/trading/telegram-config")
+async def telegram_config(req: TelegramConfigRequest):
+    telegram_notifier.configure(req.bot_token, req.chat_id)
+    success = await telegram_notifier.send_message("🚀 *MT5 AI Trader*: Telegram Push Notifications Connected Successfully!")
+    return {"success": success}
 
 
 @app.on_event("startup")

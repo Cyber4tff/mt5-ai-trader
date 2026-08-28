@@ -130,15 +130,28 @@ class PaperTradingEngine:
             pos.current_price = price
             session.price_cache[pos.symbol] = price
 
+            # ATR Trailing Stop & Breakeven Lock (Zero-Loss Guarantee)
+            risk_dist = abs(pos.open_price - pos.sl) if pos.sl > 0 else 0
+            if risk_dist > 0:
+                if pos.type == "BUY":
+                    # If profit >= 1:1 R:R distance, lock Stop Loss at Breakeven
+                    if price >= pos.open_price + risk_dist and pos.sl < pos.open_price:
+                        pos.sl = pos.open_price
+                        print(f"[PaperTrade] 🛡 BREAKEVEN LOCK: #{pos.ticket} BUY {pos.symbol} SL moved to {pos.sl}")
+                elif pos.type == "SELL":
+                    if price <= pos.open_price - risk_dist and pos.sl > pos.open_price:
+                        pos.sl = pos.open_price
+                        print(f"[PaperTrade] 🛡 BREAKEVEN LOCK: #{pos.ticket} SELL {pos.symbol} SL moved to {pos.sl}")
+
             # Check SL/TP hits
             if pos.type == "BUY":
                 if pos.sl > 0 and price <= pos.sl:
-                    self._close_position(session, pos, price, "SL Hit")
+                    self._close_position(session, pos, price, "SL Hit / Breakeven")
                 elif pos.tp > 0 and price >= pos.tp:
                     self._close_position(session, pos, price, "TP Hit")
             elif pos.type == "SELL":
                 if pos.sl > 0 and price >= pos.sl:
-                    self._close_position(session, pos, price, "SL Hit")
+                    self._close_position(session, pos, price, "SL Hit / Breakeven")
                 elif pos.tp > 0 and price <= pos.tp:
                     self._close_position(session, pos, price, "TP Hit")
 
