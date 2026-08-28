@@ -15,6 +15,7 @@ export function WebTerminalPanel() {
   const [iframeKey, setIframeKey] = useState(0);
   const [loadFailed, setLoadFailed] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
+  const [showEmbed, setShowEmbed] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
 
   const isLiveMode = connection.connected && connection.mode === "live";
@@ -181,57 +182,61 @@ export function WebTerminalPanel() {
               )}
             </AnimatePresence>
 
-            {/* Fallback if iframe can't load */}
-            {loadFailed && (
-              <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-card gap-4">
-                <AlertTriangle className="size-10 text-amber-500" />
-                <div className="text-center max-w-sm">
-                  <h3 className="text-foreground font-semibold text-sm mb-1">
-                    Terminal can&apos;t load here
+            {/* Embedded Terminal Frame or Safe Gateway Card */}
+            {!showEmbed ? (
+              <div className="p-6 md:p-8 flex flex-col items-center justify-center text-center space-y-4 bg-gradient-to-b from-card to-secondary/30 min-h-[400px]">
+                <div className="size-16 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center mb-1">
+                  <Monitor className="size-8 text-emerald-500" />
+                </div>
+                <div className="max-w-md space-y-2">
+                  <h3 className="text-lg font-bold text-foreground tracking-tight">
+                    {connection.broker} Web Terminal Gateway
                   </h3>
                   <p className="text-xs text-muted-foreground leading-relaxed">
-                    The MT5 Web Terminal needs to open in a full browser window.
-                    Click below to open it in a new tab with your broker pre-selected.
+                    Server: <span className="font-mono text-emerald-400 font-semibold">{connection.server}</span>
+                  </p>
+                  <p className="text-xs text-muted-foreground leading-relaxed">
+                    To connect your MT5 account securely on mobile/iPad without browser blocking, launch the terminal in a clean tab below.
                   </p>
                 </div>
-                <Button
-                  onClick={handleOpenExternal}
-                  className="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold px-6"
-                >
-                  <ExternalLink className="size-4 mr-2" />
-                  Open MT5 Terminal
-                </Button>
-                <p className="text-[10px] text-muted-foreground">
-                  Server: <span className="text-foreground font-mono">{connection.mt5Server}</span>
-                </p>
-              </div>
-            )}
 
-            {/* Iframe overlay prompting user to log in and confirm */}
-            {!liveState.mt5Confirmed && !loadFailed && (
-              <div className="absolute inset-x-0 bottom-0 z-10 bg-gradient-to-t from-black/80 to-transparent p-4 pointer-events-none">
-                <div className="flex items-center gap-2 pointer-events-auto max-w-md mx-auto">
-                  <div className="flex-1 p-2 rounded-lg bg-black/60 backdrop-blur-sm border border-white/10">
-                    <p className="text-[11px] text-white/90 font-medium">
-                      Step 1: Log into your MT5 account in the terminal above
-                    </p>
-                    <p className="text-[10px] text-white/50 mt-0.5">
-                      Then click &quot;Confirm MT5 Connected&quot; in the sidebar panel →
-                    </p>
-                  </div>
+                <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
+                  <Button
+                    onClick={handleOpenExternal}
+                    className="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold px-6 shadow-lg shadow-emerald-600/20"
+                    size="lg"
+                  >
+                    <ExternalLink className="size-4 mr-2" />
+                    Launch MT5 Web Terminal
+                  </Button>
+
+                  <Button
+                    onClick={() => setShowEmbed(true)}
+                    variant="outline"
+                    className="border-border text-foreground hover:bg-accent text-xs"
+                    size="lg"
+                  >
+                    Try Embedded View
+                  </Button>
+                </div>
+
+                <div className="pt-4 border-t border-border/50 max-w-sm text-center">
+                  <p className="text-[11px] text-muted-foreground">
+                    💡 After logging into MT5 in the terminal window, return here and enter your MT5 Account # in the sidebar to enable 24/7 autonomous auto-trading.
+                  </p>
                 </div>
               </div>
+            ) : (
+              <iframe
+                key={iframeKey}
+                src={terminalUrl}
+                className="w-full h-full border-0"
+                style={{ minHeight: "600px" }}
+                allow="clipboard-read; clipboard-write; autoplay; camera; microphone"
+                title="MetaTrader 5 Web Terminal — Live Trading"
+                onError={() => setLoadFailed(true)}
+              />
             )}
-
-            <iframe
-              key={iframeKey}
-              src={terminalUrl}
-              className="w-full h-full border-0"
-              style={{ minHeight: "600px" }}
-              allow="clipboard-read; clipboard-write; autoplay; camera; microphone"
-              title="MetaTrader 5 Web Terminal — Live Trading"
-              onError={() => setLoadFailed(true)}
-            />
           </CardContent>
         </Card>
       </motion.div>
